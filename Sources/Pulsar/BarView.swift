@@ -28,6 +28,9 @@ struct BarView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: sectionGap) {
                     HeaderRow(model: model)
+                    if showAddDevice {
+                        AddDevicePanel(model: model, onDone: { showAddDevice = false })
+                    }
                     if settings.settings.devices.isEmpty {
                         EmptyDevicesCTA(onAddDevice: { showAddDevice = true })
                     }
@@ -52,9 +55,6 @@ struct BarView: View {
         }
         .frame(width: panelWidth)
         .background(.regularMaterial)
-        .sheet(isPresented: $showAddDevice) {
-            AddDeviceSheet(model: model, isPresented: $showAddDevice)
-        }
     }
 }
 
@@ -888,44 +888,42 @@ private struct ActionRow: View {
     }
 }
 
-// MARK: - Add Device sheet
+// MARK: - Add Device
 
-private struct AddDeviceSheet: View {
+private struct AddDevicePanel: View {
     let model: ControlModel
-    @Binding var isPresented: Bool
+    let onDone: () -> Void
 
     @ObservedObject var discovery: WLEDDiscovery
     @ObservedObject var settings: SettingsStore
 
     @State private var elapsed: Double = 0
 
-    init(model: ControlModel, isPresented: Binding<Bool>) {
+    init(model: ControlModel, onDone: @escaping () -> Void) {
         self.model = model
-        self._isPresented = isPresented
+        self.onDone = onDone
         self.discovery = model.discovery
         self.settings = model.settings
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Add Device").font(.headline)
+        Section(title: "Add Device") {
+            VStack(alignment: .leading, spacing: 8) {
+                discoveredList
 
-            discoveredList
-
-            HStack {
-                Spacer()
-                Button("Done") { isPresented = false }
-                    .keyboardShortcut(.defaultAction)
+                HStack {
+                    Spacer()
+                    Button("Done", action: onDone)
+                        .controlSize(.small)
+                }
             }
-        }
-        .padding(18)
-        .frame(width: 320)
-        .onAppear {
-            discovery.start()
-            elapsed = 0
-        }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            elapsed += 1
+            .onAppear {
+                discovery.start()
+                elapsed = 0
+            }
+            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+                elapsed += 1
+            }
         }
     }
 
@@ -1014,6 +1012,6 @@ private struct AddDeviceSheet: View {
             pixelCount: d.pixelCount ?? 0 > 0 ? (d.pixelCount ?? 1) : 1,
             rgbw: d.rgbw ?? false
         )
-        isPresented = false
+        onDone()
     }
 }
