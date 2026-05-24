@@ -34,6 +34,7 @@ struct Config: Codable {
     let enabled: Bool?
     let effect: String?
     let palette: String?
+    let brightness: Float?
     let speed: Float?
     let intensity: Float?
 
@@ -53,6 +54,7 @@ struct Config: Codable {
         enabled: nil,
         effect: "spectrum",
         palette: "sunset",
+        brightness: 1.0,
         speed: 1.0,
         intensity: 1.0
     )

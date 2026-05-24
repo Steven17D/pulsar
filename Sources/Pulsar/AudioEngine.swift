@@ -145,7 +145,7 @@ final class AudioEngine: @unchecked Sendable {
                     mappers[i].palette = view.palette
                     mappers[i].speed = view.speed
                     mappers[i].intensity = view.intensity
-                    mappers[i].brightness = dev?.brightness ?? 1.0
+                    mappers[i].brightness = view.brightness * (dev?.brightness ?? 1.0)
                     if let segs = dev?.segments {
                         mappers[i].updateSegments(segs)
                     }

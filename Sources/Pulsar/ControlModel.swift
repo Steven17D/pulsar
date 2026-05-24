@@ -19,6 +19,7 @@ struct RenderView {
     let enabled: Bool
     let effect: String
     let palette: Palette
+    let brightness: Float
     let speed: Float
     let intensity: Float
     let devices: [DeviceRuntime]
@@ -29,6 +30,7 @@ final class RenderState: @unchecked Sendable {
     private var enabled: Bool = true
     private var effect: String = "spectrum"
     private var paletteID: String = "sunset"
+    private var brightness: Float = 1.0
     private var speed: Float = 1.0
     private var intensity: Float = 1.0
     private var devices: [DeviceRuntime] = []
@@ -38,16 +40,18 @@ final class RenderState: @unchecked Sendable {
         return RenderView(
             enabled: enabled, effect: effect,
             palette: Palette.by(id: paletteID),
+            brightness: brightness,
             speed: speed, intensity: intensity,
             devices: devices
         )
     }
 
-    func replace(enabled: Bool, effect: String, paletteID: String, speed: Float, intensity: Float, devices: [DeviceRuntime]) {
+    func replace(enabled: Bool, effect: String, paletteID: String, brightness: Float, speed: Float, intensity: Float, devices: [DeviceRuntime]) {
         lock.lock(); defer { lock.unlock() }
         self.enabled = enabled
         self.effect = effect
         self.paletteID = paletteID
+        self.brightness = brightness
         self.speed = speed
         self.intensity = intensity
         self.devices = devices
@@ -66,6 +70,11 @@ final class RenderState: @unchecked Sendable {
     func setPalette(_ id: String) {
         lock.lock(); defer { lock.unlock() }
         paletteID = id
+    }
+
+    func setBrightness(_ v: Float) {
+        lock.lock(); defer { lock.unlock() }
+        brightness = v
     }
 
     func setSpeed(_ s: Float) {
@@ -151,6 +160,7 @@ final class ControlModel: ObservableObject {
         let rawEffect = cfg.effect ?? cfg.devices.first?.effect ?? "spectrum"
         s.effect = Self.migrateEffect(rawEffect)
         s.palette = Palette.allIDs.contains(cfg.palette ?? "") ? (cfg.palette ?? "sunset") : "sunset"
+        s.brightness = max(0.0, min(1.0, cfg.brightness ?? 1.0))
         s.speed = max(0.0, min(2.0, cfg.speed ?? 1.0))
         s.intensity = max(0.0, min(2.0, cfg.intensity ?? 1.0))
         s.devices = cfg.devices.map { d in
@@ -172,6 +182,7 @@ final class ControlModel: ObservableObject {
         settings.settings = s
         renderState.replace(
             enabled: s.enabled, effect: s.effect, paletteID: s.palette,
+            brightness: s.brightness,
             speed: s.speed, intensity: s.intensity, devices: s.devices
         )
     }
@@ -320,6 +331,15 @@ final class ControlModel: ObservableObject {
         persist()
     }
 
+    func setBrightness(_ v: Float) {
+        let c = max(0, min(1, v))
+        var snap = settings.settings
+        snap.brightness = c
+        settings.settings = snap
+        renderState.setBrightness(c)
+        persist()
+    }
+
     func setSpeed(_ v: Float) {
         let c = max(0, min(2, v))
         var snap = settings.settings
@@ -408,6 +428,7 @@ final class ControlModel: ObservableObject {
             enabled: settings.settings.enabled,
             effect: settings.settings.effect,
             paletteID: settings.settings.palette,
+            brightness: settings.settings.brightness,
             speed: settings.settings.speed,
             intensity: settings.settings.intensity,
             devices: devs
@@ -431,6 +452,7 @@ final class ControlModel: ObservableObject {
             enabled: settings.settings.enabled,
             effect: settings.settings.effect,
             paletteID: settings.settings.palette,
+            brightness: settings.settings.brightness,
             speed: settings.settings.speed,
             intensity: settings.settings.intensity,
             devices: devs
@@ -588,7 +610,8 @@ final class ControlModel: ObservableObject {
                 smoothing: cfg.smoothing, min_freq_hz: cfg.min_freq_hz,
                 max_freq_hz: cfg.max_freq_hz, devices: newDevs,
                 enabled: snap.enabled, effect: snap.effect,
-                palette: snap.palette, speed: snap.speed, intensity: snap.intensity
+                palette: snap.palette, brightness: snap.brightness,
+                speed: snap.speed, intensity: snap.intensity
             )
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]

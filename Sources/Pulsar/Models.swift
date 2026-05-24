@@ -34,6 +34,7 @@ struct Settings: Equatable {
     var enabled: Bool
     var effect: String
     var palette: String
+    var brightness: Float
     var speed: Float
     var intensity: Float
     var devices: [DeviceRuntime]
@@ -48,6 +49,7 @@ struct Settings: Equatable {
         enabled: true,
         effect: "spectrum",
         palette: "sunset",
+        brightness: 1.0,
         speed: 1.0,
         intensity: 1.0,
         devices: [],

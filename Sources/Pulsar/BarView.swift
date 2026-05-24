@@ -356,15 +356,27 @@ private struct SlidersSection: View {
 
     var body: some View {
         Section(title: "Mix") {
-            DetentSliderRow(
+            CompactSliderRow(
+                title: "Brightness",
+                value: Double(settings.settings.brightness),
+                range: 0...1,
+                valueText: "\(Int(settings.settings.brightness * 100))%",
+                onChange: { model.setBrightness(Float($0)) },
+                enabled: settings.status == .running
+            )
+            CompactSliderRow(
                 title: "Speed",
                 value: Double(settings.settings.speed),
+                range: 0.1...2.0,
+                valueText: String(format: "%0.2fx", settings.settings.speed),
                 onChange: { model.setSpeed(Float($0)) },
                 enabled: settings.status == .running
             )
-            DetentSliderRow(
+            CompactSliderRow(
                 title: "Intensity",
                 value: Double(settings.settings.intensity),
+                range: 0.1...2.0,
+                valueText: String(format: "%0.2fx", settings.settings.intensity),
                 onChange: { model.setIntensity(Float($0)) },
                 enabled: settings.status == .running
             )
@@ -372,54 +384,34 @@ private struct SlidersSection: View {
     }
 }
 
-/// Slider row with a soft detent at 1.0×, a tick mark on the track to
-/// signal the default, and a "Default" hint that appears at the detent.
-private struct DetentSliderRow: View {
+private struct CompactSliderRow: View {
     let title: String
     let value: Double
+    let range: ClosedRange<Double>
+    let valueText: String
     let onChange: (Double) -> Void
     let enabled: Bool
 
-    private var isDefault: Bool { abs(value - 1.0) < 0.001 }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.body)
-                Spacer()
-                Text(String(format: "%0.2fx", value))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .onTapGesture {
-                        tapHaptic()
-                        onChange(1.0)
-                    }
-            }
-            ZStack(alignment: .leading) {
-                Slider(value: Binding(
-                    get: { value },
-                    set: { v in
-                        let snapped = abs(v - 1.0) < 0.04 ? 1.0 : v
-                        onChange(snapped)
-                    }
-                ), in: 0.1...2.0)
-                .disabled(!enabled)
-
-                GeometryReader { geo in
-                    let frac = (1.0 - 0.1) / (2.0 - 0.1)
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.25))
-                        .frame(width: 1, height: 6)
-                        .offset(x: geo.size.width * CGFloat(frac), y: geo.size.height / 2 - 3)
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.callout)
+                .frame(width: 68, alignment: .leading)
+            Slider(value: Binding(
+                get: { value },
+                set: { v in
+                    let snapped = range.contains(1.0) && abs(v - 1.0) < 0.04 ? 1.0 : v
+                    onChange(snapped)
                 }
-                .allowsHitTesting(false)
-            }
-            .frame(height: 22)
-            Text(isDefault ? "Default" : " ")
+            ), in: range)
+            .disabled(!enabled)
+            Text(valueText)
                 .font(.caption2)
+                .monospacedDigit()
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                .frame(width: 42, alignment: .trailing)
         }
+        .frame(height: 24)
     }
 }
 
@@ -465,14 +457,14 @@ private struct DeviceDisclosureRow: View {
             Button {
                 withAnimation(snapSpring) { expanded.toggle() }
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Circle()
                         .fill(device.enabled ? Color.green : Color.secondary.opacity(0.4))
-                        .frame(width: 8, height: 8)
+                        .frame(width: 7, height: 7)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(device.name).font(.body)
+                        Text(device.name).font(.callout.weight(.medium))
                         Text(detailLine(device))
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -482,22 +474,23 @@ private struct DeviceDisclosureRow: View {
                     ))
                     .labelsHidden()
                     .toggleStyle(.switch)
+                    .controlSize(.small)
                     .disabled(settings.status != .running)
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             if expanded {
                 DeviceDetail(model: model, index: index, dev: device)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
                     .padding(.top, 2)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
@@ -677,7 +670,7 @@ private struct StartupSection: View {
     var body: some View {
         Section(title: "Startup") {
             HStack {
-                Text("Start at login")
+                Text("Start at login").font(.callout)
                 Spacer()
                 Toggle("", isOn: Binding(
                     get: { ctrl.startAtLogin },
@@ -685,6 +678,7 @@ private struct StartupSection: View {
                 ))
                 .labelsHidden()
                 .toggleStyle(.switch)
+                .controlSize(.small)
             }
             if let notice = ctrl.startupNotice {
                 Text(notice)
