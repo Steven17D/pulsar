@@ -23,31 +23,27 @@ struct BarView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: sectionGap) {
-                    HeaderRow(model: model)
-                    AddDevicePanel(model: model)
-                    LiveSection(model: model)
-                    MasterSection(model: model)
-                    EffectSection(model: model)
-                    PaletteSection(model: model)
-                    SlidersSection(model: model)
-                    if !settings.settings.devices.isEmpty {
-                        DevicesSection(model: model)
-                    }
-                    StartupSection(model: model)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: sectionGap) {
+                HeaderRow(model: model)
+                AddDevicePanel(model: model)
+                LiveSection(model: model)
+                MasterSection(model: model)
+                EffectSection(model: model)
+                PaletteSection(model: model)
+                SlidersSection(model: model)
+                if !settings.settings.devices.isEmpty {
+                    DevicesSection(model: model)
                 }
-                .padding(.horizontal, hPad)
-                .padding(.vertical, hPad)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                StartupSection(model: model)
+                Footer(model: model)
             }
-            .frame(maxHeight: 620)
-
-            Divider()
-            Footer(model: model)
+            .padding(.horizontal, hPad)
+            .padding(.vertical, hPad)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: panelWidth)
+        .frame(maxHeight: 620)
         .background(.regularMaterial)
     }
 }
