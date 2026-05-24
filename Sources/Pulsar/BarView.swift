@@ -16,10 +16,12 @@ private func tapHaptic() {
 struct BarView: View {
     let model: ControlModel
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var discovery: WLEDDiscovery
 
     init(model: ControlModel) {
         self.model = model
         self.settings = model.settings
+        self.discovery = model.discovery
     }
 
     var body: some View {
@@ -27,7 +29,9 @@ struct BarView: View {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: sectionGap) {
                     HeaderRow(model: model)
-                    AddDevicePanel(model: model)
+                    if hasAddableDiscoveries {
+                        AddDevicePanel(model: model)
+                    }
                     LiveSection(model: model)
                     MasterSection(model: model)
                     EffectSection(model: model)
@@ -47,6 +51,12 @@ struct BarView: View {
         .frame(width: panelWidth, height: 620)
         .background(.regularMaterial)
     }
+
+    private var hasAddableDiscoveries: Bool {
+        discovery.discovered.contains { d in
+            !settings.settings.devices.contains(where: { $0.ip == d.ip })
+        }
+    }
 }
 
 // MARK: - Header
@@ -54,10 +64,12 @@ struct BarView: View {
 private struct HeaderRow: View {
     let model: ControlModel
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var discovery: WLEDDiscovery
 
     init(model: ControlModel) {
         self.model = model
         self.settings = model.settings
+        self.discovery = model.discovery
     }
 
     var body: some View {
@@ -70,7 +82,10 @@ private struct HeaderRow: View {
                     .monospacedDigit()
             }
             Spacer()
-            StatusPill(model: model)
+            VStack(alignment: .trailing, spacing: 4) {
+                StatusPill(model: model)
+                DiscoveryPill(discovery: discovery, settings: settings)
+            }
         }
     }
 
@@ -809,6 +824,36 @@ private struct StatusPill: View {
     }
 }
 
+private struct DiscoveryPill: View {
+    @ObservedObject var discovery: WLEDDiscovery
+    @ObservedObject var settings: SettingsStore
+
+    private var addableCount: Int {
+        discovery.discovered.filter { d in
+            !settings.settings.devices.contains(where: { $0.ip == d.ip })
+        }.count
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: addableCount > 0 ? "plus.circle.fill" : "antenna.radiowaves.left.and.right")
+                .font(.caption2)
+            Text(label)
+                .font(.caption.weight(.medium))
+        }
+        .foregroundStyle(addableCount > 0 ? Color.accentColor : .secondary)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(Color.primary.opacity(0.08)))
+    }
+
+    private var label: String {
+        if addableCount > 0 { return "\(addableCount) new" }
+        if discovery.discovered.isEmpty { return "Scanning" }
+        return "\(settings.settings.devices.count) WLED"
+    }
+}
+
 // MARK: - Footer
 
 private struct Footer: View {
@@ -892,7 +937,7 @@ private struct AddDevicePanel: View {
     }
 
     var body: some View {
-        Section(title: "Discovery") {
+        Section(title: "New WLED") {
             discoveredList
             .onAppear {
                 discovery.start()

@@ -243,6 +243,7 @@ final class ControlModel: ObservableObject {
                   let hw = json["hw"] as? [String: Any],
                   let led = hw["led"] as? [String: Any],
                   let ins = led["ins"] as? [[String: Any]] else { return }
+            let info = await fetchWLEDInfo(ip: dev.ip)
             var newSegs: [SegmentRuntime] = []
             for inst in ins {
                 let start = inst["start"] as? Int ?? 0
@@ -257,16 +258,39 @@ final class ControlModel: ObservableObject {
                     mirror: existing?.mirror ?? false
                 ))
             }
-            guard !newSegs.isEmpty, newSegs != dev.segments else { return }
+            let newPixelCount = info.pixelCount ?? dev.pixelCount
+            let newRGBW = info.rgbw ?? dev.rgbw
+            let needsEngineRebuild = newPixelCount != dev.pixelCount || newRGBW != dev.rgbw
+            let changed = newSegs != dev.segments || needsEngineRebuild
+            guard !newSegs.isEmpty, changed else { return }
             var snap = settings.settings
+            snap.devices[i].pixelCount = newPixelCount
+            snap.devices[i].rgbw = newRGBW
             snap.devices[i].segments = newSegs
             settings.settings = snap
-            renderState.mutateDevice(index: i) { $0.segments = newSegs }
+            renderState.mutateDevice(index: i) {
+                $0.pixelCount = newPixelCount
+                $0.rgbw = newRGBW
+                $0.segments = newSegs
+            }
             persist()
+            if needsEngineRebuild { rebuildEngine() }
             log.info("device \(dev.name, privacy: .public) → \(newSegs.count) segments")
         } catch {
             log.error("segment refresh failed for \(dev.name, privacy: .public): \(String(describing: error), privacy: .public)")
         }
+    }
+
+    private func fetchWLEDInfo(ip: String) async -> (pixelCount: Int?, rgbw: Bool?) {
+        guard let url = URL(string: "http://\(ip)/json/info") else { return (nil, nil) }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 3
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let leds = json["leds"] as? [String: Any] else {
+            return (nil, nil)
+        }
+        return (leds["count"] as? Int, leds["rgbw"] as? Bool)
     }
 
     // MARK: - User actions

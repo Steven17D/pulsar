@@ -8,7 +8,7 @@ import OSLog
 ///       (commit the framebuffer). Set push ONLY on the final fragment of
 ///       a frame, so multi-packet frames render as a single update.
 ///   [1] sequence number (4 bits in low nibble), upper nibble unused
-///   [2] data type: 0xC1 = RGBW, 0x01 = RGB
+///   [2] data type: 0x0B = RGB888, 0x1B = RGBW8888
 ///   [3] id (1=display)
 ///   [4..7] offset (big-endian, byte offset within the LED stream)
 ///   [8..9] length (big-endian, number of payload bytes in this packet)
@@ -26,7 +26,7 @@ final class DDPSender {
 
     init(host: String, port: UInt16 = 4048, rgbw: Bool, queueLabel: String) {
         self.host = host
-        self.dataType = rgbw ? 0xC1 : 0x01
+        self.dataType = rgbw ? 0x1B : 0x0B
         self.queue = DispatchQueue(label: queueLabel, qos: .userInteractive)
         let nwHost = NWEndpoint.Host(host)
         let nwPort = NWEndpoint.Port(rawValue: port)!
