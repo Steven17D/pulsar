@@ -33,9 +33,7 @@ struct BarView: View {
                         AddDevicePanel(model: model)
                     }
                     LiveSection(model: model)
-                    MasterSection(model: model)
-                    EffectSection(model: model)
-                    PaletteSection(model: model)
+                    LookSection(model: model)
                     SlidersSection(model: model)
                     if !settings.settings.devices.isEmpty {
                         DevicesSection(model: model)
@@ -83,7 +81,17 @@ private struct HeaderRow: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 4) {
-                StatusPill(model: model)
+                HStack(spacing: 8) {
+                    Toggle("", isOn: Binding(
+                        get: { settings.settings.enabled },
+                        set: { model.setMasterEnabled($0) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(settings.status != .running)
+                    StatusPill(model: model)
+                }
                 DiscoveryPill(discovery: discovery, settings: settings)
             }
         }
@@ -266,9 +274,9 @@ private struct PowerNumber: View {
     }
 }
 
-// MARK: - Master
+// MARK: - Look
 
-private struct MasterSection: View {
+private struct LookSection: View {
     let model: ControlModel
     @ObservedObject var settings: SettingsStore
     init(model: ControlModel) {
@@ -277,37 +285,8 @@ private struct MasterSection: View {
     }
 
     var body: some View {
-        Section(title: "Master") {
-            LabeledContent {
-                Toggle("", isOn: Binding(
-                    get: { settings.settings.enabled },
-                    set: { model.setMasterEnabled($0) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .disabled(settings.status != .running)
-            } label: {
-                Text(settings.settings.enabled ? "On" : "Off")
-                    .font(.body)
-            }
-        }
-    }
-}
-
-// MARK: - Effect
-
-private struct EffectSection: View {
-    let model: ControlModel
-    @ObservedObject var settings: SettingsStore
-    init(model: ControlModel) {
-        self.model = model
-        self.settings = model.settings
-    }
-
-    var body: some View {
-        Section(title: "Effect") {
+        Section(title: "Look") {
             HStack(spacing: 8) {
-                paletteSwatchPreview
                 Picker("", selection: Binding(
                     get: { settings.settings.effect },
                     set: { model.setMasterEffect($0) }
@@ -319,45 +298,10 @@ private struct EffectSection: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .disabled(settings.status != .running)
-            }
-        }
-    }
+                .frame(maxWidth: .infinity)
 
-    private var paletteSwatchPreview: some View {
-        let palette = Palette.by(id: settings.settings.palette)
-        return RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .fill(LinearGradient(
-                gradient: Gradient(stops: palette.stops.map {
-                    Gradient.Stop(
-                        color: Color(red: Double($0.r), green: Double($0.g), blue: Double($0.b)),
-                        location: CGFloat($0.pos)
-                    )
-                }),
-                startPoint: .leading, endPoint: .trailing
-            ))
-            .frame(width: 22, height: 22)
-            .overlay(
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
-            )
-    }
-}
-
-// MARK: - Palette
-
-private struct PaletteSection: View {
-    let model: ControlModel
-    @ObservedObject var settings: SettingsStore
-    init(model: ControlModel) {
-        self.model = model
-        self.settings = model.settings
-    }
-
-    var body: some View {
-        Section(title: "Palette") {
-            HStack(alignment: .top, spacing: 8) {
                 ForEach(settings.settings.availablePalettes, id: \.self) { id in
-                    PaletteSwatch(
+                    CompactPaletteSwatch(
                         palette: Palette.by(id: id),
                         selected: settings.settings.palette == id
                     ) {
@@ -370,45 +314,33 @@ private struct PaletteSection: View {
     }
 }
 
-private struct PaletteSwatch: View {
+private struct CompactPaletteSwatch: View {
     let palette: Palette
     let selected: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(LinearGradient(
-                        gradient: Gradient(stops: palette.stops.map {
-                            Gradient.Stop(
-                                color: Color(red: Double($0.r), green: Double($0.g), blue: Double($0.b)),
-                                location: CGFloat($0.pos)
-                            )
-                        }),
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    ))
-                    .frame(width: 44, height: 44)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(Color.accentColor, lineWidth: selected ? 2 : 0)
-                            .padding(-3)
-                    )
-                    .shadow(color: selected ? Color.accentColor.opacity(0.35) : .clear,
-                            radius: selected ? 5 : 0)
-                Text(palette.name)
-                    .font(.caption2)
-                    .foregroundStyle(selected ? Color.primary : .secondary)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(LinearGradient(
+                    gradient: Gradient(stops: palette.stops.map {
+                        Gradient.Stop(
+                            color: Color(red: Double($0.r), green: Double($0.g), blue: Double($0.b)),
+                            location: CGFloat($0.pos)
+                        )
+                    }),
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                ))
+                .frame(width: 24, height: 24)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.10),
+                                      lineWidth: selected ? 2 : 0.5)
+                )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(palette.name)
     }
 }
 
