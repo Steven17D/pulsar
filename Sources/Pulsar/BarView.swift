@@ -897,13 +897,7 @@ private struct AddDeviceSheet: View {
     @ObservedObject var discovery: WLEDDiscovery
     @ObservedObject var settings: SettingsStore
 
-    @State private var manualExpanded: Bool = true
     @State private var elapsed: Double = 0
-    @State private var manualName: String = ""
-    @State private var manualIP: String = ""
-    @State private var manualCount: String = ""
-    @State private var manualRGBW: Bool = false
-    @State private var selectedID: String?
 
     init(model: ControlModel, isPresented: Binding<Bool>) {
         self.model = model
@@ -913,45 +907,25 @@ private struct AddDeviceSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Add WLED Device").font(.headline)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add Device").font(.headline)
 
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeader("Discovered")
-                discoveredList
-            }
-
-            DisclosureGroup(isExpanded: $manualExpanded) {
-                manualEntry.padding(.top, 8)
-            } label: {
-                Text("Manual entry").font(.body)
-            }
+            discoveredList
 
             HStack {
                 Spacer()
-                if canAdd {
-                    Button("Cancel") { isPresented = false }
-                    Button("Add") { commit() }
-                        .keyboardShortcut(.defaultAction)
-                } else {
-                    Button("Done") { isPresented = false }
-                        .keyboardShortcut(.defaultAction)
-                }
+                Button("Done") { isPresented = false }
+                    .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
-        .frame(width: 380)
+        .padding(18)
+        .frame(width: 320)
         .onAppear {
             discovery.start()
             elapsed = 0
-            selectedID = nil
-            manualExpanded = true
         }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             elapsed += 1
-            if elapsed > 5 && discovery.discovered.isEmpty {
-                manualExpanded = true
-            }
         }
     }
 
@@ -962,23 +936,10 @@ private struct AddDeviceSheet: View {
     }
 
     @ViewBuilder private var discoveredList: some View {
-        if discovery.discovered.isEmpty {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(elapsed > 5 ? "No devices found yet. Try manual entry." : "Scanning local network…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-        } else if addableDiscoveries.isEmpty {
-            Text("All discovered devices are already added. Use manual entry below.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 4)
-        } else {
-            VStack(spacing: 4) {
+        VStack(spacing: 6) {
+            if addableDiscoveries.isEmpty {
+                waitingRow
+            } else {
                 ForEach(addableDiscoveries) { d in
                     discoveredRow(d)
                 }
@@ -986,38 +947,59 @@ private struct AddDeviceSheet: View {
         }
     }
 
-    @ViewBuilder private func discoveredRow(_ d: DiscoveredWLED) -> some View {
-        let alreadyConfigured = settings.settings.devices.contains(where: { $0.ip == d.ip })
-        Button { if !alreadyConfigured { selectedID = d.id } } label: {
+    private var waitingRow: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(elapsed > 5 ? "Waiting for WLED" : "Scanning")
+                    .font(.body)
+                Text(waitingDetail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
+    }
+
+    private var waitingDetail: String {
+        if discovery.discovered.isEmpty {
+            return "Turn on a WLED device nearby"
+        }
+        return "Discovered devices are already added"
+    }
+
+    private func discoveredRow(_ d: DiscoveredWLED) -> some View {
+        Button { add(d) } label: {
             HStack(spacing: 10) {
-                Image(systemName: alreadyConfigured
-                      ? "checkmark.circle.fill"
-                      : (selectedID == d.id ? "largecircle.fill.circle" : "circle"))
-                    .foregroundStyle(alreadyConfigured
-                                     ? AnyShapeStyle(Color.green)
-                                     : (selectedID == d.id ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)))
+                Image(systemName: "plus.circle.fill")
+                    .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(d.serviceName).font(.body)
-                    Text(detailLine(d, alreadyConfigured: alreadyConfigured))
+                    Text(detailLine(d))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
             }
-            .padding(.vertical, 5)
-            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
             .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(selectedID == d.id ? Color.accentColor.opacity(0.15) : Color.clear)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(alreadyConfigured)
     }
 
-    private func detailLine(_ d: DiscoveredWLED, alreadyConfigured: Bool) -> String {
-        if alreadyConfigured { return "Already configured" }
+    private func detailLine(_ d: DiscoveredWLED) -> String {
         var parts: [String] = [d.ip]
         if let n = d.pixelCount { parts.append("\(n) px") }
         if let w = d.rgbw { parts.append(w ? "RGBW" : "RGB") }
@@ -1025,59 +1007,13 @@ private struct AddDeviceSheet: View {
         return parts.joined(separator: " · ")
     }
 
-    private var manualEntry: some View {
-        VStack(spacing: 8) {
-            LabeledField(label: "Name", text: $manualName, placeholder: "Living Room")
-            LabeledField(label: "IP", text: $manualIP, placeholder: "192.168.1.42")
-            LabeledField(label: "Pixels", text: $manualCount, placeholder: "120")
-            HStack {
-                Text("RGBW").font(.caption).frame(width: 60, alignment: .leading)
-                Toggle("", isOn: $manualRGBW).labelsHidden().toggleStyle(.switch)
-                Spacer()
-            }
-        }
-    }
-
-    private var canAdd: Bool {
-        if let id = selectedID,
-           let d = addableDiscoveries.first(where: { $0.id == id }),
-           !settings.settings.devices.contains(where: { $0.ip == d.ip }) {
-            return true
-        }
-        return !manualName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !manualIP.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (Int(manualCount.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 0
-    }
-
-    private func commit() {
-        if let id = selectedID,
-           let d = addableDiscoveries.first(where: { $0.id == id }) {
-            model.addDevice(
-                name: d.serviceName,
-                ip: d.ip,
-                pixelCount: d.pixelCount ?? 0 > 0 ? (d.pixelCount ?? 1) : 1,
-                rgbw: d.rgbw ?? false
-            )
-        } else if let count = Int(manualCount.trimmingCharacters(in: .whitespacesAndNewlines)), count > 0 {
-            model.addDevice(
-                name: manualName.trimmingCharacters(in: .whitespacesAndNewlines),
-                ip: manualIP.trimmingCharacters(in: .whitespacesAndNewlines),
-                pixelCount: count,
-                rgbw: manualRGBW
-            )
-        }
+    private func add(_ d: DiscoveredWLED) {
+        model.addDevice(
+            name: d.serviceName,
+            ip: d.ip,
+            pixelCount: d.pixelCount ?? 0 > 0 ? (d.pixelCount ?? 1) : 1,
+            rgbw: d.rgbw ?? false
+        )
         isPresented = false
-    }
-}
-
-private struct LabeledField: View {
-    let label: String
-    @Binding var text: String
-    let placeholder: String
-    var body: some View {
-        HStack {
-            Text(label).font(.caption).frame(width: 60, alignment: .leading)
-            TextField(placeholder, text: $text).textFieldStyle(.roundedBorder)
-        }
     }
 }
