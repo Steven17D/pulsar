@@ -1,0 +1,18 @@
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/
+.vscode/
+.idea/
+.DS_Store
+/Pulsar.app/
+/Pulsar.zip
+/dist/
+
+# generated icon staging
+/tmp/
+/scratch/
+
+# editor backups
+*.swp
+*~
