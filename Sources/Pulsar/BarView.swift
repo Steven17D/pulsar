@@ -16,7 +16,6 @@ private func tapHaptic() {
 struct BarView: View {
     let model: ControlModel
     @ObservedObject var settings: SettingsStore
-    @State private var showAddDevice: Bool = false
 
     init(model: ControlModel) {
         self.model = model
@@ -28,12 +27,7 @@ struct BarView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: sectionGap) {
                     HeaderRow(model: model)
-                    if showAddDevice {
-                        AddDevicePanel(model: model, onDone: { showAddDevice = false })
-                    }
-                    if settings.settings.devices.isEmpty {
-                        EmptyDevicesCTA(onAddDevice: { showAddDevice = true })
-                    }
+                    AddDevicePanel(model: model)
                     LiveSection(model: model)
                     MasterSection(model: model)
                     EffectSection(model: model)
@@ -51,7 +45,7 @@ struct BarView: View {
             .frame(maxHeight: 620)
 
             Divider()
-            Footer(model: model, onAddDevice: { showAddDevice = true })
+            Footer(model: model)
         }
         .frame(width: panelWidth)
         .background(.regularMaterial)
@@ -792,43 +786,12 @@ private struct StatusPill: View {
     }
 }
 
-// MARK: - Empty state
-
-private struct EmptyDevicesCTA: View {
-    let onAddDevice: () -> Void
-    var body: some View {
-        SectionCard {
-            VStack(spacing: 8) {
-                Image(systemName: "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 22))
-                    .foregroundStyle(.secondary)
-                Text("No WLED devices configured.")
-                    .font(.body)
-                Text("Add one to start driving lights.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button(action: onAddDevice) {
-                    Label("Add Device…", systemImage: "plus.circle.fill")
-                        .font(.body)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .padding(.top, 2)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
-        }
-    }
-}
-
 // MARK: - Footer
 
 private struct Footer: View {
     let model: ControlModel
-    let onAddDevice: () -> Void
     var body: some View {
         VStack(spacing: 0) {
-            ActionRow(icon: "plus.circle", title: "Add Device…", action: onAddDevice)
             ActionRow(icon: "square.and.pencil", title: "Edit Config…") {
                 let p = NSString(string: "~/.config/pulsar/config.json").expandingTildeInPath
                 NSWorkspace.shared.open(URL(fileURLWithPath: p))
@@ -892,31 +855,21 @@ private struct ActionRow: View {
 
 private struct AddDevicePanel: View {
     let model: ControlModel
-    let onDone: () -> Void
 
     @ObservedObject var discovery: WLEDDiscovery
     @ObservedObject var settings: SettingsStore
 
     @State private var elapsed: Double = 0
 
-    init(model: ControlModel, onDone: @escaping () -> Void) {
+    init(model: ControlModel) {
         self.model = model
-        self.onDone = onDone
         self.discovery = model.discovery
         self.settings = model.settings
     }
 
     var body: some View {
-        Section(title: "Add Device") {
-            VStack(alignment: .leading, spacing: 8) {
-                discoveredList
-
-                HStack {
-                    Spacer()
-                    Button("Done", action: onDone)
-                        .controlSize(.small)
-                }
-            }
+        Section(title: "Discovery") {
+            discoveredList
             .onAppear {
                 discovery.start()
                 elapsed = 0
@@ -1012,6 +965,5 @@ private struct AddDevicePanel: View {
             pixelCount: d.pixelCount ?? 0 > 0 ? (d.pixelCount ?? 1) : 1,
             rgbw: d.rgbw ?? false
         )
-        onDone()
     }
 }
