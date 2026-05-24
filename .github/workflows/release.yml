@@ -26,7 +26,7 @@ jobs:
         run: bash scripts/package.sh
 
       - name: Create draft GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: Pulsar.zip
