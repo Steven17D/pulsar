@@ -11,7 +11,7 @@ if ! command -v swift >/dev/null 2>&1; then
     exit 1
 fi
 
-swift build -c release
+swift build ${SWIFT_BUILD_FLAGS:-} -c release
 
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/pulsar-pkg.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
@@ -19,8 +19,9 @@ trap 'rm -rf "$STAGE"' EXIT
 APP="$STAGE/Pulsar.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 install -m 644 Sources/Pulsar/Info.plist "$APP/Contents/Info.plist"
-install -m 755 .build/release/Pulsar    "$APP/Contents/MacOS/pulsar"
+install -m 755 .build/release/Pulsar    "$APP/Contents/MacOS/Pulsar"
 install -m 644 AppIcon.icns             "$APP/Contents/Resources/AppIcon.icns"
+printf "APPL????" > "$APP/Contents/PkgInfo"
 
 codesign --force --sign - --options runtime \
     --entitlements pulsar.entitlements \

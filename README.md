@@ -1,5 +1,9 @@
 # Pulsar
 
+[![CI](https://github.com/Steven17D/pulsar/actions/workflows/ci.yml/badge.svg)](https://github.com/Steven17D/pulsar/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/Steven17D/pulsar)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014.4%2B-blue)](https://www.apple.com/macos/)
+
 Audio-reactive WLED controller for macOS. Taps the system audio output
 via Core Audio's Process Tap API (macOS 14.4+), runs an FFT, and pushes
 DDP/UDP frames to one or more WLED controllers at 60 Hz. Lives in the
@@ -65,8 +69,8 @@ Spotlight to reindex.
 On first launch macOS prompts for **Audio Capture** permission. Approve
 via *System Settings → Privacy & Security → Audio Capture → Pulsar*.
 
-To run at login: drag `~/Applications/Pulsar.app` into *System Settings
-→ General → Login Items*, or set up a LaunchAgent (see [LaunchAgent](#launchagent)).
+To run at login, open the Pulsar menu-bar panel and enable
+*Startup → Start at login*.
 
 ## Configuration
 
@@ -90,8 +94,8 @@ first run; here is the schema with annotations:
 
   "devices": [
     {
-      "name": "Office",
-      "ip": "192.168.0.192",
+      "name": "Desk",
+      "ip": "192.0.2.42",
       "pixel_count": 237,
       "rgbw": false,
       "brightness": 1.0,
@@ -139,9 +143,9 @@ tab once the controller is back.
 
 ## LaunchAgent
 
-For autostart without a Login Items entry, drop this at
-`~/Library/LaunchAgents/io.pulsar.audio.plist` and run
-`launchctl bootstrap gui/$UID ~/Library/LaunchAgents/io.pulsar.audio.plist`:
+Pulsar's *Start at login* toggle writes this file for you at
+`~/Library/LaunchAgents/io.pulsar.audio.plist`. Advanced users can manage
+the same LaunchAgent manually:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>

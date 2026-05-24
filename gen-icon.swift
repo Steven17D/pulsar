@@ -1,18 +1,15 @@
 #!/usr/bin/env swift
-// Regenerates wled-tap/AppIcon.icns from scratch. The icon is checked
-// into the repo as a binary blob so the home-manager activation can
-// install it without an extra build step; this script exists so the
-// design (5 EQ bars in palette gradients + glow dots on a deep-purple
-// squircle) can be tweaked and the .icns rebuilt deterministically.
+// Regenerates Pulsar's AppIcon.icns from scratch. The .icns is checked
+// in so a release build doesn't need to redraw it.
 //
 // Usage from this directory:
-//   swift gen-icon.swift && mv /tmp/wled-tap.icns AppIcon.icns
+//   swift gen-icon.swift && mv /tmp/pulsar.icns AppIcon.icns
 
 import AppKit
 import CoreGraphics
 import Foundation
 
-let outDir = "/tmp/wled-tap-iconset"
+let outDir = "/tmp/pulsar-iconset"
 try? FileManager.default.removeItem(atPath: outDir)
 try FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
@@ -140,12 +137,12 @@ for (size, name) in sizes {
 }
 
 // Wrap iconset → .icns via the system tool.
-let isetDest = "/tmp/wled-tap.iconset"
+let isetDest = "/tmp/pulsar.iconset"
 try? FileManager.default.removeItem(atPath: isetDest)
 try FileManager.default.moveItem(atPath: outDir, toPath: isetDest)
 let task = Process()
 task.launchPath = "/usr/bin/iconutil"
-task.arguments = ["-c", "icns", isetDest, "-o", "/tmp/wled-tap.icns"]
+task.arguments = ["-c", "icns", isetDest, "-o", "/tmp/pulsar.icns"]
 try task.run()
 task.waitUntilExit()
-print("/tmp/wled-tap.icns")
+print("/tmp/pulsar.icns")

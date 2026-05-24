@@ -86,27 +86,34 @@ final class RenderState: @unchecked Sendable {
 }
 
 @MainActor
-final class ControlModel {
+final class ControlModel: ObservableObject {
     static let shared = ControlModel()
     let log = Logger(subsystem: "io.pulsar.audio", category: "ControlModel")
 
     let live = LiveStore()
     let settings = SettingsStore()
     let renderState = RenderState()
+    let discovery = WLEDDiscovery()
+
+    @Published private(set) var startAtLogin: Bool = false
+    @Published var startupNotice: String?
 
     private var engine: AudioEngine?
     private var baseConfig: Config = .default
     private let saveQueue = DispatchQueue(label: "pulsar.save", qos: .utility)
 
+    private var launchAgentPlistPath: String {
+        "\(NSHomeDirectory())/Library/LaunchAgents/io.pulsar.audio.plist"
+    }
+
     func boot() {
         let cfg = Config.load()
         baseConfig = cfg
         seedFromConfig(cfg)
+        refreshStartAtLoginState()
 
-        // Try discovering segments from WLED in background once at boot
-        // — overrides defaults but preserves per-segment reverse/mirror
-        // already in the on-disk config. Wait 2s so the engine has a
-        // chance to settle before we spam the network.
+        discovery.start()
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             Task { @MainActor [weak self] in
                 await self?.refreshAllSegmentsFromWLED()
@@ -182,7 +189,6 @@ final class ControlModel {
     }
 
     private func startEngine(retry: Int = 0) {
-        SystemAudioTap.destroyAggregate(uid: "io.ledfx.wled-sync")
         let engine = AudioEngine(config: baseConfig, renderState: renderState) { frame, sr in
             DispatchQueue.main.async {
                 ControlModel.shared.publishLiveFrame(frame, sampleRate: sr)
@@ -325,10 +331,174 @@ final class ControlModel {
         persist()
     }
 
+    // MARK: - Device CRUD
+
+    /// Inserts a new device, persists, then refreshes its segments.
+    func addDevice(name: String, ip: String, pixelCount: Int, rgbw: Bool) {
+        guard !ip.isEmpty, !name.isEmpty, pixelCount > 0 else { return }
+        if settings.settings.devices.contains(where: { $0.ip == ip }) { return }
+        let dev = DeviceRuntime(
+            name: name, ip: ip, pixelCount: pixelCount, rgbw: rgbw,
+            brightness: 1.0, enabled: true,
+            segments: [SegmentRuntime(start: 0, length: pixelCount, reverse: false, mirror: false)]
+        )
+        settings.settings.devices.append(dev)
+        var devs = renderState.snapshot().devices
+        devs.append(dev)
+        renderState.replace(
+            enabled: settings.settings.enabled,
+            effect: settings.settings.effect,
+            paletteID: settings.settings.palette,
+            speed: settings.settings.speed,
+            intensity: settings.settings.intensity,
+            devices: devs
+        )
+        persist()
+        let newIndex = settings.settings.devices.count - 1
+        Task { @MainActor [weak self] in
+            await self?.refreshSegmentsFromWLED(deviceIndex: newIndex)
+        }
+        rebuildEngine()
+    }
+
+    func removeDevice(index: Int) {
+        guard settings.settings.devices.indices.contains(index) else { return }
+        settings.settings.devices.remove(at: index)
+        var devs = renderState.snapshot().devices
+        if devs.indices.contains(index) { devs.remove(at: index) }
+        renderState.replace(
+            enabled: settings.settings.enabled,
+            effect: settings.settings.effect,
+            paletteID: settings.settings.palette,
+            speed: settings.settings.speed,
+            intensity: settings.settings.intensity,
+            devices: devs
+        )
+        persist()
+        rebuildEngine()
+    }
+
+    func renameDevice(index: Int, to name: String) {
+        guard settings.settings.devices.indices.contains(index), !name.isEmpty else { return }
+        settings.settings.devices[index].name = name
+        renderState.mutateDevice(index: index) { $0.name = name }
+        persist()
+    }
+
+    /// Restarts the audio engine so DDP senders + mappers reflect the
+    /// current device list. Cheap; the tap teardown + recreate is bounded.
+    private func rebuildEngine() {
+        engine?.stop()
+        engine = nil
+        guard settings.status == .running || settings.status == .starting else { return }
+        startEngine()
+    }
+
     func reloadFromDisk() {
         let cfg = Config.load()
         baseConfig = cfg
         seedFromConfig(cfg)
+    }
+
+    // MARK: - Startup
+
+    private func refreshStartAtLoginState() {
+        startAtLogin = FileManager.default.fileExists(atPath: launchAgentPlistPath)
+    }
+
+    func setStartAtLogin(_ enabled: Bool) {
+        startupNotice = nil
+        if enabled {
+            installLaunchAgent()
+        } else {
+            uninstallLaunchAgent()
+        }
+        refreshStartAtLoginState()
+    }
+
+    private func installLaunchAgent() {
+        guard let plist = makeLaunchAgentPlist() else {
+            startupNotice = "Unable to find the running Pulsar binary."
+            return
+        }
+        let plistURL = URL(fileURLWithPath: launchAgentPlistPath)
+        let agentDir = plistURL.deletingLastPathComponent()
+        let cacheDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".cache", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: agentDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            try plist.write(to: plistURL, atomically: true, encoding: .utf8)
+            runLaunchctl(["bootstrap", "gui/\(getuid())", launchAgentPlistPath])
+        } catch {
+            startupNotice = "Could not install the startup item."
+            log.error("LaunchAgent install failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func uninstallLaunchAgent() {
+        if getppid() == 1 {
+            startupNotice = "Pulsar will not start at login next time. Quit and relaunch to unload the current startup job."
+        } else {
+            runLaunchctl(["bootout", "gui/\(getuid())/io.pulsar.audio"])
+        }
+        do {
+            try FileManager.default.removeItem(atPath: launchAgentPlistPath)
+        } catch {
+            if !FileManager.default.fileExists(atPath: launchAgentPlistPath) { return }
+            startupNotice = "Could not remove the startup item."
+            log.error("LaunchAgent removal failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func makeLaunchAgentPlist() -> String? {
+        guard let executablePath = Bundle.main.executablePath else { return nil }
+        let home = NSHomeDirectory()
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>Label</key><string>io.pulsar.audio</string>
+          <key>ProgramArguments</key>
+          <array>
+            <string>\(Self.xmlEscaped(executablePath))</string>
+          </array>
+          <key>RunAtLoad</key><true/>
+          <key>KeepAlive</key>
+          <dict>
+            <key>SuccessfulExit</key><false/>
+            <key>Crashed</key><true/>
+          </dict>
+          <key>LimitLoadToSessionType</key><string>Aqua</string>
+          <key>ProcessType</key><string>Interactive</string>
+          <key>ThrottleInterval</key><integer>30</integer>
+          <key>StandardOutPath</key><string>\(Self.xmlEscaped(home))/.cache/pulsar.log</string>
+          <key>StandardErrorPath</key><string>\(Self.xmlEscaped(home))/.cache/pulsar.log</string>
+        </dict>
+        </plist>
+        """
+    }
+
+    private static func xmlEscaped(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    private func runLaunchctl(_ args: [String]) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        p.arguments = args
+        do {
+            try p.run()
+            p.waitUntilExit()
+        } catch {
+            startupNotice = "Could not update the startup item."
+            log.error("launchctl failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     func quit() {

@@ -37,7 +37,7 @@ private final class AppController: ObservableObject {
 }
 
 @main
-struct WledTapApp: App {
+struct PulsarApp: App {
     @StateObject private var controller = AppController()
 
     var body: some Scene {

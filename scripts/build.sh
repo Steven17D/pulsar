@@ -17,15 +17,16 @@ if ! command -v swift >/dev/null 2>&1; then
 fi
 
 echo "==> building (release)"
-swift build -c release
+swift build ${SWIFT_BUILD_FLAGS:-} -c release
 
 APP="${HOME}/Applications/Pulsar.app"
 echo "==> staging $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 install -m 644 Sources/Pulsar/Info.plist "$APP/Contents/Info.plist"
-install -m 755 .build/release/Pulsar    "$APP/Contents/MacOS/pulsar"
+install -m 755 .build/release/Pulsar    "$APP/Contents/MacOS/Pulsar"
 install -m 644 AppIcon.icns             "$APP/Contents/Resources/AppIcon.icns"
+printf "APPL????" > "$APP/Contents/PkgInfo"
 
 echo "==> codesigning"
 codesign --force --sign - --options runtime \

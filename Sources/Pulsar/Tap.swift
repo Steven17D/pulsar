@@ -186,30 +186,6 @@ final class SystemAudioTap {
         log.info("tap running")
     }
 
-    /// Destroy any aggregate device matching the given UID. Migration hook
-    /// for the prior LedFx + BlackHole stack, which left an aggregate called
-    /// "WLED Sync" with UID `io.ledfx.wled-sync` registered in coreaudiod;
-    /// removing the brew cask doesn't take that with it. Silent no-op if
-    /// the device isn't present.
-    static func destroyAggregate(uid: String) {
-        var deviceID: AudioDeviceID = .unknown
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var cfUID = uid as CFString
-        let uidSize = UInt32(MemoryLayout<CFString>.size)
-        let s = withUnsafePointer(to: &cfUID) { ptr -> OSStatus in
-            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, uidSize, ptr, &size, &deviceID)
-        }
-        guard s == noErr, deviceID != .unknown, deviceID != 0 else { return }
-        let dst = AudioHardwareDestroyAggregateDevice(deviceID)
-        let log = Logger(subsystem: "io.pulsar.audio", category: "migration")
-        log.info("destroyed legacy aggregate uid=\(uid, privacy: .public) id=\(deviceID) err=\(dst)")
-    }
-
     func aggregateIsAlive() -> Bool {
         guard aggregateDeviceID.isValid else { return false }
         var alive: UInt32 = 0

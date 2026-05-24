@@ -1,22 +1,22 @@
 import AppKit
 import SwiftUI
 
-private enum Tab: String, CaseIterable, Hashable {
-    case overview, office, tv
+private let panelWidth: CGFloat = 360
+private let hPad: CGFloat = 16
+private let sectionGap: CGFloat = 18
+private let rowGap: CGFloat = 10
+private let cardCorner: CGFloat = 10
+private let snapSpring = Animation.spring(response: 0.3, dampingFraction: 0.85)
 
-    var label: String {
-        switch self {
-        case .overview: return "Overview"
-        case .office:   return "Office"
-        case .tv:       return "TV"
-        }
-    }
+/// Light haptic for discrete control changes (palette pick, etc.).
+private func tapHaptic() {
+    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
 }
 
 struct BarView: View {
     let model: ControlModel
     @ObservedObject var settings: SettingsStore
-    @State private var tab: Tab = .overview
+    @State private var showAddDevice: Bool = false
 
     init(model: ControlModel) {
         self.model = model
@@ -25,65 +25,42 @@ struct BarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            tabsHeader
-
-            VStack(alignment: .leading, spacing: 14) {
-                switch tab {
-                case .overview:
-                    OverviewSection(model: model)
-                case .office:
-                    if let d = device(index: 0) { DeviceSection(model: model, index: 0, dev: d) }
-                case .tv:
-                    if let d = device(index: 1) { DeviceSection(model: model, index: 1, dev: d) }
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: sectionGap) {
+                    HeaderRow(model: model)
+                    if settings.settings.devices.isEmpty {
+                        EmptyDevicesCTA(onAddDevice: { showAddDevice = true })
+                    }
+                    LiveSection(model: model)
+                    MasterSection(model: model)
+                    EffectSection(model: model)
+                    PaletteSection(model: model)
+                    SlidersSection(model: model)
+                    if !settings.settings.devices.isEmpty {
+                        DevicesSection(model: model)
+                    }
+                    StartupSection(model: model)
                 }
+                .padding(.horizontal, hPad)
+                .padding(.vertical, hPad)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxHeight: 620)
 
             Divider()
-            Footer(model: model)
+            Footer(model: model, onAddDevice: { showAddDevice = true })
         }
-        .frame(width: 340)
-    }
-
-    private var tabsHeader: some View {
-        let tabs = tabsAvailable
-        return HStack(spacing: 6) {
-            ForEach(tabs, id: \.self) { t in
-                Button { tab = t } label: {
-                    Text(t.label)
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(tab == t ? Color.accentColor.opacity(0.85) : Color.gray.opacity(0.15))
-                        )
-                        .foregroundColor(tab == t ? .white : .primary)
-                }
-                .buttonStyle(.plain)
-            }
+        .frame(width: panelWidth)
+        .background(.regularMaterial)
+        .sheet(isPresented: $showAddDevice) {
+            AddDeviceSheet(model: model, isPresented: $showAddDevice)
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-    }
-
-    private var tabsAvailable: [Tab] {
-        var t: [Tab] = [.overview]
-        let n = settings.settings.devices.count
-        if n > 0 { t.append(.office) }
-        if n > 1 { t.append(.tv) }
-        return t
-    }
-
-    private func device(index: Int) -> DeviceRuntime? {
-        let devs = settings.settings.devices
-        return devs.indices.contains(index) ? devs[index] : nil
     }
 }
 
-private struct OverviewSection: View {
+// MARK: - Header
+
+private struct HeaderRow: View {
     let model: ControlModel
     @ObservedObject var settings: SettingsStore
 
@@ -93,217 +70,296 @@ private struct OverviewSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Pulsar").font(.system(size: 14, weight: .semibold))
-                    Text(updatedLine)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                StatusPill(model: model)
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Pulsar").font(.headline)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
-
-            SectionLabel("Live")
-            SpectrumStripView(model: model).frame(height: 48)
-            HStack(spacing: 8) {
-                Text("Power").font(.system(size: 11)).foregroundColor(.secondary).frame(width: 50, alignment: .leading)
-                PowerBarView(live: model.live)
-                PowerNumber(live: model.live)
-            }
-
-            SectionLabel("Master")
-            HStack {
-                Text(settings.settings.enabled ? "On" : "Off").font(.system(size: 12))
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { settings.settings.enabled },
-                    set: { model.setMasterEnabled($0) }
-                ))
-                .labelsHidden().toggleStyle(.switch)
-                .disabled(settings.status != .running)
-            }
-
-            SectionLabel("Effect")
-            Picker("", selection: Binding(
-                get: { settings.settings.effect },
-                set: { model.setMasterEffect($0) }
-            )) {
-                ForEach(settings.settings.availableEffects, id: \.self) { e in
-                    Text(Mapper.pretty(e)).tag(e)
-                }
-            }
-            .labelsHidden().pickerStyle(.menu)
-            .disabled(settings.status != .running)
-
-            SectionLabel("Palette")
-            HStack(spacing: 6) {
-                ForEach(settings.settings.availablePalettes, id: \.self) { id in
-                    PaletteSwatch(
-                        palette: Palette.by(id: id),
-                        selected: settings.settings.palette == id
-                    ) { model.setPalette(id) }
-                }
-            }
-
-            SectionLabel("Speed")
-            HStack(spacing: 8) {
-                Slider(value: Binding(
-                    get: { Double(settings.settings.speed) },
-                    set: { v in
-                        // Soft detent at 1.0x — within ±0.04 the slider
-                        // snaps to exactly the default so it's easy to
-                        // dial back to a known-good state without
-                        // overshooting.
-                        let snapped = abs(v - 1.0) < 0.04 ? 1.0 : v
-                        model.setSpeed(Float(snapped))
-                    }
-                ), in: 0.1...2.0)
-                .disabled(settings.status != .running)
-                Text(String(format: "%0.2fx", settings.settings.speed))
-                    .font(.system(size: 11, design: .monospaced))
-                    .frame(width: 44, alignment: .trailing)
-                    .onTapGesture { model.setSpeed(1.0) }
-            }
-
-            SectionLabel("Intensity")
-            HStack(spacing: 8) {
-                Slider(value: Binding(
-                    get: { Double(settings.settings.intensity) },
-                    set: { v in
-                        let snapped = abs(v - 1.0) < 0.04 ? 1.0 : v
-                        model.setIntensity(Float(snapped))
-                    }
-                ), in: 0.1...2.0)
-                .disabled(settings.status != .running)
-                Text(String(format: "%0.2fx", settings.settings.intensity))
-                    .font(.system(size: 11, design: .monospaced))
-                    .frame(width: 44, alignment: .trailing)
-                    .onTapGesture { model.setIntensity(1.0) }
-            }
-
-            if !settings.settings.devices.isEmpty {
-                SectionLabel("Devices")
-                ForEach(Array(settings.settings.devices.enumerated()), id: \.element.id) { (idx, d) in
-                    DeviceRow(model: model, index: idx, dev: d)
-                }
-            }
+            Spacer()
+            StatusPill(model: model)
         }
     }
 
-    private var updatedLine: String {
+    private var subtitle: String {
         let s = settings.settings
         return "\(Int(s.sampleRate)) Hz · \(s.fps) fps · \(s.bandCount) bands"
     }
 }
 
-private struct DeviceRow: View {
-    let model: ControlModel
-    let index: Int
-    let dev: DeviceRuntime
-    @ObservedObject var settings: SettingsStore
+// MARK: - Section scaffolding
 
-    init(model: ControlModel, index: Int, dev: DeviceRuntime) {
-        self.model = model
-        self.index = index
-        self.dev = dev
-        self.settings = model.settings
-    }
-
+/// Native-feeling section header. Subheadline weight, secondary colour,
+/// no all-caps. Pairs with `SectionCard` for grouped content.
+private struct SectionHeader: View {
+    let text: String
+    init(_ text: String) { self.text = text }
     var body: some View {
-        HStack(spacing: 10) {
-            Circle().fill(dev.enabled ? Color.green : Color.gray.opacity(0.4)).frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(dev.name).font(.system(size: 12, weight: .medium))
-                Text("\(dev.ip) · \(dev.pixelCount) \(dev.rgbw ? "RGBW" : "RGB") · \(dev.segments.count) seg")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-            }
-            Spacer()
-            Toggle("", isOn: Binding(
-                get: { dev.enabled },
-                set: { model.setDeviceEnabled(index: index, $0) }
-            ))
-            .labelsHidden().toggleStyle(.switch)
-            .disabled(settings.status != .running)
+        Text(text)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
+    }
+}
+
+/// Inset card surface for grouped controls. Mimics GroupBox material
+/// but lets us own padding so vertical rhythm stays on the 8pt grid.
+private struct SectionCard<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: rowGap) {
+            content
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: cardCorner, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: cardCorner, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+        )
+    }
+}
+
+private struct Section<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeader(title)
+            SectionCard { content }
         }
     }
 }
 
-private struct DeviceSection: View {
+// MARK: - Live
+
+private struct LiveSection: View {
     let model: ControlModel
-    let index: Int
-    let dev: DeviceRuntime
+    var body: some View {
+        Section(title: "Live") {
+            SpectrumStripView(model: model)
+                .frame(height: 56)
+            HStack(spacing: 10) {
+                Text("Power")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .leading)
+                PowerBarView(model: model)
+                PowerNumber(model: model)
+            }
+        }
+    }
+}
+
+private struct SpectrumStripView: View {
+    @ObservedObject var live: LiveStore
     @ObservedObject var settings: SettingsStore
 
-    init(model: ControlModel, index: Int, dev: DeviceRuntime) {
-        self.model = model
-        self.index = index
-        self.dev = dev
+    init(model: ControlModel) {
+        self.live = model.live
         self.settings = model.settings
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(dev.name).font(.system(size: 14, weight: .semibold))
-                    Text("\(dev.ip) · \(dev.pixelCount) \(dev.rgbw ? "RGBW" : "RGB") · \(dev.segments.count) seg")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                StatusPill(model: model)
-            }
+        SpectrumStrip(values: live.frame.spectrum,
+                      palette: Palette.by(id: settings.settings.palette))
+            .animation(nil, value: live.frame.spectrum)
+    }
+}
 
-            SectionLabel("Enabled")
-            HStack {
-                Text(dev.enabled ? "On" : "Off").font(.system(size: 12))
-                Spacer()
+private struct SpectrumStrip: View {
+    let values: [Float]
+    let palette: Palette
+
+    var body: some View {
+        GeometryReader { geo in
+            let mainH = geo.size.height * 0.78
+            let reflectH = geo.size.height - mainH - 1
+            VStack(spacing: 0) {
+                HStack(alignment: .bottom, spacing: 2) {
+                    ForEach(0..<max(1, values.count), id: \.self) { i in
+                        let v = i < values.count ? values[i] : 0
+                        let h = max(1.5, mainH * CGFloat(max(0, min(1, v))))
+                        bar(for: i, height: h)
+                    }
+                }
+                .frame(height: mainH, alignment: .bottom)
+
+                Rectangle()
+                    .fill(Color.primary.opacity(0.08))
+                    .frame(height: 1)
+
+                HStack(alignment: .top, spacing: 2) {
+                    ForEach(0..<max(1, values.count), id: \.self) { i in
+                        let v = i < values.count ? values[i] : 0
+                        let h = max(1, reflectH * CGFloat(max(0, min(1, v))))
+                        bar(for: i, height: h)
+                            .opacity(0.3)
+                            .scaleEffect(y: -1, anchor: .center)
+                    }
+                }
+                .frame(height: reflectH, alignment: .top)
+                .mask(
+                    LinearGradient(
+                        colors: [.black, .clear],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+            }
+        }
+    }
+
+    @ViewBuilder private func bar(for i: Int, height: CGFloat) -> some View {
+        let f = values.count <= 1 ? Float(0) : Float(i) / Float(values.count - 1)
+        let visualF = 0.28 + 0.72 * f
+        let raw = palette.sample(at: visualF)
+        let r = Double(min(1.0, raw.r * 1.15 + 0.06))
+        let g = Double(min(1.0, raw.g * 1.15 + 0.06))
+        let b = Double(min(1.0, raw.b * 1.15 + 0.06))
+        let base = Color(red: r, green: g, blue: b)
+        RoundedRectangle(cornerRadius: 1.5)
+            .fill(LinearGradient(
+                colors: [base.opacity(0.75), base],
+                startPoint: .top, endPoint: .bottom
+            ))
+            .frame(height: height)
+    }
+}
+
+private struct PowerBarView: View {
+    @ObservedObject var live: LiveStore
+    init(model: ControlModel) { self.live = model.live }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.10))
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: max(2, CGFloat(min(1, live.frame.power * 4)) * geo.size.width))
+            }
+        }
+        .frame(height: 6)
+        .animation(nil, value: live.frame.power)
+    }
+}
+
+private struct PowerNumber: View {
+    @ObservedObject var live: LiveStore
+    init(model: ControlModel) { self.live = model.live }
+    var body: some View {
+        Text(String(format: "%0.2f", live.frame.power))
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .frame(width: 36, alignment: .trailing)
+            .animation(nil, value: live.frame.power)
+    }
+}
+
+// MARK: - Master
+
+private struct MasterSection: View {
+    let model: ControlModel
+    @ObservedObject var settings: SettingsStore
+    init(model: ControlModel) {
+        self.model = model
+        self.settings = model.settings
+    }
+
+    var body: some View {
+        Section(title: "Master") {
+            LabeledContent {
                 Toggle("", isOn: Binding(
-                    get: { dev.enabled },
-                    set: { model.setDeviceEnabled(index: index, $0) }
+                    get: { settings.settings.enabled },
+                    set: { model.setMasterEnabled($0) }
                 ))
-                .labelsHidden().toggleStyle(.switch)
+                .labelsHidden()
+                .toggleStyle(.switch)
                 .disabled(settings.status != .running)
-            }
-
-            HStack {
-                SectionLabel("Segments")
-                Spacer()
-                Button {
-                    Task { await model.refreshSegmentsFromWLED(deviceIndex: index) }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                        .font(.system(size: 11))
-                }
-                .buttonStyle(.plain).foregroundColor(.accentColor)
-            }
-            ForEach(Array(dev.segments.enumerated()), id: \.element.id) { (segIdx, seg) in
-                SegmentRow(model: model, deviceIndex: index, segmentIndex: segIdx, seg: seg)
-            }
-
-            SectionLabel("Brightness")
-            HStack(spacing: 8) {
-                Slider(value: Binding(
-                    get: { Double(dev.brightness) },
-                    set: { model.setDeviceBrightness(index: index, Float($0)) }
-                ), in: 0...1)
-                .disabled(settings.status != .running)
-                Text(String(format: "%0.0f%%", dev.brightness * 100))
-                    .font(.system(size: 11, design: .monospaced))
-                    .frame(width: 42, alignment: .trailing)
-            }
-
-            Button {
-                if let url = URL(string: "http://\(dev.ip)/") { NSWorkspace.shared.open(url) }
             } label: {
-                Label("Open Web UI…", systemImage: "globe")
-                    .font(.system(size: 12))
+                Text(settings.settings.enabled ? "On" : "Off")
+                    .font(.body)
             }
-            .buttonStyle(.plain)
-            .foregroundColor(.accentColor)
+        }
+    }
+}
+
+// MARK: - Effect
+
+private struct EffectSection: View {
+    let model: ControlModel
+    @ObservedObject var settings: SettingsStore
+    init(model: ControlModel) {
+        self.model = model
+        self.settings = model.settings
+    }
+
+    var body: some View {
+        Section(title: "Effect") {
+            HStack(spacing: 8) {
+                paletteSwatchPreview
+                Picker("", selection: Binding(
+                    get: { settings.settings.effect },
+                    set: { model.setMasterEffect($0) }
+                )) {
+                    ForEach(settings.settings.availableEffects, id: \.self) { e in
+                        Text(Mapper.pretty(e)).tag(e)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .disabled(settings.status != .running)
+            }
+        }
+    }
+
+    private var paletteSwatchPreview: some View {
+        let palette = Palette.by(id: settings.settings.palette)
+        return RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(LinearGradient(
+                gradient: Gradient(stops: palette.stops.map {
+                    Gradient.Stop(
+                        color: Color(red: Double($0.r), green: Double($0.g), blue: Double($0.b)),
+                        location: CGFloat($0.pos)
+                    )
+                }),
+                startPoint: .leading, endPoint: .trailing
+            ))
+            .frame(width: 22, height: 22)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+            )
+    }
+}
+
+// MARK: - Palette
+
+private struct PaletteSection: View {
+    let model: ControlModel
+    @ObservedObject var settings: SettingsStore
+    init(model: ControlModel) {
+        self.model = model
+        self.settings = model.settings
+    }
+
+    var body: some View {
+        Section(title: "Palette") {
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(settings.settings.availablePalettes, id: \.self) { id in
+                    PaletteSwatch(
+                        palette: Palette.by(id: id),
+                        selected: settings.settings.palette == id
+                    ) {
+                        tapHaptic()
+                        withAnimation(snapSpring) { model.setPalette(id) }
+                    }
+                }
+            }
         }
     }
 }
@@ -315,27 +371,281 @@ private struct PaletteSwatch: View {
 
     var body: some View {
         Button(action: action) {
-            ZStack(alignment: .bottom) {
-                LinearGradient(
-                    gradient: Gradient(stops: palette.stops.map {
-                        Gradient.Stop(color: Color(red: Double($0.r), green: Double($0.g), blue: Double($0.b)), location: CGFloat($0.pos))
-                    }),
-                    startPoint: .leading, endPoint: .trailing
-                )
+            VStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(LinearGradient(
+                        gradient: Gradient(stops: palette.stops.map {
+                            Gradient.Stop(
+                                color: Color(red: Double($0.r), green: Double($0.g), blue: Double($0.b)),
+                                location: CGFloat($0.pos)
+                            )
+                        }),
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    ))
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.accentColor, lineWidth: selected ? 2 : 0)
+                            .padding(-3)
+                    )
+                    .shadow(color: selected ? Color.accentColor.opacity(0.35) : .clear,
+                            radius: selected ? 5 : 0)
                 Text(palette.name)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.white)
-                    .shadow(color: .black.opacity(0.6), radius: 1)
-                    .padding(.bottom, 2)
+                    .font(.caption2)
+                    .foregroundStyle(selected ? Color.primary : .secondary)
+                    .lineLimit(1)
             }
-            .frame(height: 32)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
-            .overlay(
-                RoundedRectangle(cornerRadius: 5)
-                    .stroke(selected ? Color.accentColor : Color.clear, lineWidth: 2)
-            )
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Sliders
+
+private struct SlidersSection: View {
+    let model: ControlModel
+    @ObservedObject var settings: SettingsStore
+    init(model: ControlModel) {
+        self.model = model
+        self.settings = model.settings
+    }
+
+    var body: some View {
+        Section(title: "Mix") {
+            DetentSliderRow(
+                title: "Speed",
+                value: Double(settings.settings.speed),
+                onChange: { model.setSpeed(Float($0)) },
+                enabled: settings.status == .running
+            )
+            DetentSliderRow(
+                title: "Intensity",
+                value: Double(settings.settings.intensity),
+                onChange: { model.setIntensity(Float($0)) },
+                enabled: settings.status == .running
+            )
+        }
+    }
+}
+
+/// Slider row with a soft detent at 1.0×, a tick mark on the track to
+/// signal the default, and a "Default" hint that appears at the detent.
+private struct DetentSliderRow: View {
+    let title: String
+    let value: Double
+    let onChange: (Double) -> Void
+    let enabled: Bool
+
+    private var isDefault: Bool { abs(value - 1.0) < 0.001 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.body)
+                Spacer()
+                Text(String(format: "%0.2fx", value))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .onTapGesture {
+                        tapHaptic()
+                        onChange(1.0)
+                    }
+            }
+            ZStack(alignment: .leading) {
+                Slider(value: Binding(
+                    get: { value },
+                    set: { v in
+                        let snapped = abs(v - 1.0) < 0.04 ? 1.0 : v
+                        onChange(snapped)
+                    }
+                ), in: 0.1...2.0)
+                .disabled(!enabled)
+
+                GeometryReader { geo in
+                    let frac = (1.0 - 0.1) / (2.0 - 0.1)
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.25))
+                        .frame(width: 1, height: 6)
+                        .offset(x: geo.size.width * CGFloat(frac), y: geo.size.height / 2 - 3)
+                }
+                .allowsHitTesting(false)
+            }
+            .frame(height: 22)
+            Text(isDefault ? "Default" : " ")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+}
+
+// MARK: - Devices
+
+private struct DevicesSection: View {
+    let model: ControlModel
+    @ObservedObject var settings: SettingsStore
+    init(model: ControlModel) {
+        self.model = model
+        self.settings = model.settings
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeader("Devices")
+            VStack(spacing: 6) {
+                ForEach(Array(settings.settings.devices.enumerated()), id: \.element.id) { (idx, d) in
+                    DeviceDisclosureRow(model: model, index: idx, dev: d)
+                }
+            }
+        }
+    }
+}
+
+private struct DeviceDisclosureRow: View {
+    let model: ControlModel
+    let index: Int
+    let dev: DeviceRuntime
+    @ObservedObject var settings: SettingsStore
+    @State private var expanded: Bool = false
+
+    init(model: ControlModel, index: Int, dev: DeviceRuntime) {
+        self.model = model
+        self.index = index
+        self.dev = dev
+        self.settings = model.settings
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(snapSpring) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(dev.enabled ? Color.green : Color.secondary.opacity(0.4))
+                        .frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(dev.name).font(.body)
+                        Text(detailLine)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { dev.enabled },
+                        set: { model.setDeviceEnabled(index: index, $0) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(settings.status != .running)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                DeviceDetail(model: model, index: index, dev: dev)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+                    .padding(.top, 2)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: cardCorner, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: cardCorner, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+        )
+    }
+
+    private var detailLine: String {
+        "\(dev.ip) · \(dev.pixelCount) \(dev.rgbw ? "RGBW" : "RGB") · \(dev.segments.count) seg"
+    }
+}
+
+private struct DeviceDetail: View {
+    let model: ControlModel
+    let index: Int
+    let dev: DeviceRuntime
+    @ObservedObject var settings: SettingsStore
+
+    init(model: ControlModel, index: Int, dev: DeviceRuntime) {
+        self.model = model
+        self.index = index
+        self.dev = dev
+        self.settings = model.settings
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: rowGap) {
+            Divider()
+
+            LabeledContent {
+                Text(String(format: "%0.0f%%", dev.brightness * 100))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            } label: {
+                Text("Brightness")
+            }
+            Slider(value: Binding(
+                get: { Double(dev.brightness) },
+                set: { model.setDeviceBrightness(index: index, Float($0)) }
+            ), in: 0...1)
+            .disabled(settings.status != .running)
+
+            HStack {
+                SectionHeader("Segments")
+                Spacer()
+                Button {
+                    Task { await model.refreshSegmentsFromWLED(deviceIndex: index) }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+            }
+
+            ForEach(Array(dev.segments.enumerated()), id: \.element.id) { (segIdx, seg) in
+                SegmentRow(model: model, deviceIndex: index, segmentIndex: segIdx, seg: seg)
+            }
+
+            HStack {
+                Button {
+                    if let url = URL(string: "http://\(dev.ip)/") { NSWorkspace.shared.open(url) }
+                } label: {
+                    Label("Open Web UI…", systemImage: "globe")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                Spacer()
+                Button(role: .destructive) {
+                    model.removeDevice(index: index)
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+            }
+            .padding(.top, 4)
+        }
     }
 }
 
@@ -357,11 +667,10 @@ private struct SegmentRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("Seg \(segmentIndex + 1)")
-                    .font(.system(size: 12, weight: .medium))
+                Text("Seg \(segmentIndex + 1)").font(.caption.weight(.medium))
                 Text("[\(seg.start) … \(seg.start + seg.length - 1)] · \(seg.length)px")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Spacer()
             }
             HStack(spacing: 12) {
@@ -369,7 +678,7 @@ private struct SegmentRow: View {
                     get: { seg.reverse },
                     set: { model.setSegmentReverse(deviceIndex: deviceIndex, segmentIndex: segmentIndex, $0) }
                 )) {
-                    Text("Reverse").font(.system(size: 11))
+                    Text("Reverse").font(.caption)
                 }
                 .toggleStyle(.switch)
                 .controlSize(.mini)
@@ -379,7 +688,7 @@ private struct SegmentRow: View {
                     get: { seg.mirror },
                     set: { model.setSegmentMirror(deviceIndex: deviceIndex, segmentIndex: segmentIndex, $0) }
                 )) {
-                    Text("Mirror").font(.system(size: 11))
+                    Text("Mirror").font(.caption)
                 }
                 .toggleStyle(.switch)
                 .controlSize(.mini)
@@ -389,6 +698,41 @@ private struct SegmentRow: View {
         .padding(.vertical, 2)
     }
 }
+
+// MARK: - Startup
+
+private struct StartupSection: View {
+    let model: ControlModel
+    @ObservedObject var ctrl: ControlModel
+
+    init(model: ControlModel) {
+        self.model = model
+        self.ctrl = model
+    }
+
+    var body: some View {
+        Section(title: "Startup") {
+            HStack {
+                Text("Start at login")
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { ctrl.startAtLogin },
+                    set: { ctrl.setStartAtLogin($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+            if let notice = ctrl.startupNotice {
+                Text(notice)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+// MARK: - Status pill
 
 private struct StatusPill: View {
     @ObservedObject var live: LiveStore
@@ -400,81 +744,91 @@ private struct StatusPill: View {
     }
 
     var body: some View {
-        let txt = statusText
-        return HStack(spacing: 6) {
-            Circle().fill(color(for: txt)).frame(width: 8, height: 8)
-            Text(txt).font(.system(size: 11, weight: .medium))
+        let kind = statusKind
+        HStack(spacing: 6) {
+            Circle().fill(kind.dot).frame(width: 6, height: 6)
+            Text(kind.label).font(.caption.weight(.medium))
+                .foregroundStyle(kind.dot)
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.gray.opacity(0.18)))
+        .background(Capsule().fill(kind.dot.opacity(0.15)))
     }
 
-    private var statusText: String {
+    private enum Kind {
+        case running, silent, paused, warming, problem
+        var label: String {
+            switch self {
+            case .running: return "Running"
+            case .silent:  return "Silent"
+            case .paused:  return "Paused"
+            case .warming: return "Starting…"
+            case .problem: return "Audio Lost"
+            }
+        }
+        var dot: Color {
+            switch self {
+            case .running: return .green
+            case .silent:  return .yellow
+            case .paused:  return .secondary
+            case .warming: return .secondary
+            case .problem: return .red
+            }
+        }
+    }
+
+    private var statusKind: Kind {
         switch settings.status {
-        case .starting:      return "Starting…"
-        case .stopped:       return "Stopped"
-        case .tccDenied:     return "TCC Denied"
-        case .aggregateLost: return "Audio Lost"
+        case .starting:      return .warming
+        case .stopped:       return .problem
+        case .tccDenied:     return .problem
+        case .aggregateLost: return .problem
         case .running:
             let f = live.frame
-            if !f.aggregateAlive { return "Audio Lost" }
-            if !settings.settings.enabled { return "Paused" }
-            if f.power < 0.001 { return "Silent" }
-            return "Running"
-        }
-    }
-
-    private func color(for t: String) -> Color {
-        switch t {
-        case "Running":   return .green
-        case "Silent":    return .yellow
-        case "Paused":    return .gray
-        case "Starting…": return .gray
-        default:          return .red
+            if !f.aggregateAlive { return .problem }
+            if !settings.settings.enabled { return .paused }
+            if f.power < 0.001 { return .silent }
+            return .running
         }
     }
 }
 
-private struct SpectrumStripView: View {
-    @ObservedObject var live: LiveStore
-    @ObservedObject var settings: SettingsStore
+// MARK: - Empty state
 
-    init(model: ControlModel) {
-        self.live = model.live
-        self.settings = model.settings
-    }
-
+private struct EmptyDevicesCTA: View {
+    let onAddDevice: () -> Void
     var body: some View {
-        SpectrumStrip(values: live.frame.spectrum, palette: Palette.by(id: settings.settings.palette))
-            // Disable SwiftUI's implicit animations between frames — at
-            // 60 Hz they queue and stutter. We want each frame to land
-            // verbatim, not transition smoothly toward the next.
-            .animation(nil, value: live.frame.spectrum)
+        SectionCard {
+            VStack(spacing: 8) {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.secondary)
+                Text("No WLED devices configured.")
+                    .font(.body)
+                Text("Add one to start driving lights.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button(action: onAddDevice) {
+                    Label("Add Device…", systemImage: "plus.circle.fill")
+                        .font(.body)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .padding(.top, 2)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+        }
     }
 }
 
-private struct PowerBarView: View {
-    @ObservedObject var live: LiveStore
-    var body: some View {
-        PowerBar(value: max(0, min(1, live.frame.power * 4)))
-            .animation(nil, value: live.frame.power)
-    }
-}
-
-private struct PowerNumber: View {
-    @ObservedObject var live: LiveStore
-    var body: some View {
-        Text(String(format: "%0.2f", live.frame.power))
-            .font(.system(size: 11, design: .monospaced))
-            .frame(width: 42, alignment: .trailing)
-            .animation(nil, value: live.frame.power)
-    }
-}
+// MARK: - Footer
 
 private struct Footer: View {
     let model: ControlModel
+    let onAddDevice: () -> Void
     var body: some View {
         VStack(spacing: 0) {
+            ActionRow(icon: "plus.circle", title: "Add Device…", action: onAddDevice)
             ActionRow(icon: "square.and.pencil", title: "Edit Config…") {
                 let p = NSString(string: "~/.config/pulsar/config.json").expandingTildeInPath
                 NSWorkspace.shared.open(URL(fileURLWithPath: p))
@@ -486,25 +840,15 @@ private struct Footer: View {
             ActionRow(icon: "arrow.clockwise", title: "Reload Config", shortcut: "R") {
                 model.reloadFromDisk()
             }
-            Divider()
             ActionRow(icon: "info.circle", title: "About Pulsar") {
-                NSWorkspace.shared.open(URL(string: "https://kno.wled.ge/")!)
+                NSWorkspace.shared.open(URL(string: "https://github.com/Steven17D/pulsar")!)
             }
+            Divider().padding(.vertical, 2)
             ActionRow(icon: "power", title: "Quit", shortcut: "Q") {
                 model.quit()
             }
         }
-    }
-}
-
-private struct SectionLabel: View {
-    let text: String
-    init(_ text: String) { self.text = text }
-    var body: some View {
-        Text(text.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundColor(.secondary)
-            .tracking(0.5)
+        .padding(.vertical, 4)
     }
 }
 
@@ -517,85 +861,210 @@ private struct ActionRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon).frame(width: 16)
-                Text(title).font(.system(size: 13))
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .frame(width: 16)
+                    .foregroundStyle(.secondary)
+                Text(title).font(.body)
                 Spacer()
                 if let s = shortcut {
-                    Text("⌘\(s)").font(.system(size: 11, design: .monospaced)).foregroundColor(.secondary)
+                    Text("⌘\(s)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, hPad)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .background(hovered ? Color.accentColor.opacity(0.18) : Color.clear)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(hovered ? Color.accentColor.opacity(0.18) : Color.clear)
+                    .padding(.horizontal, 6)
+            )
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
     }
 }
 
-private struct PowerBar: View {
-    let value: Float
+// MARK: - Add Device sheet
+
+private struct AddDeviceSheet: View {
+    let model: ControlModel
+    @Binding var isPresented: Bool
+
+    @ObservedObject var discovery: WLEDDiscovery
+    @ObservedObject var settings: SettingsStore
+
+    @State private var manualExpanded: Bool = true
+    @State private var elapsed: Double = 0
+    @State private var manualName: String = ""
+    @State private var manualIP: String = ""
+    @State private var manualCount: String = ""
+    @State private var manualRGBW: Bool = false
+    @State private var selectedID: String?
+
+    init(model: ControlModel, isPresented: Binding<Bool>) {
+        self.model = model
+        self._isPresented = isPresented
+        self.discovery = model.discovery
+        self.settings = model.settings
+    }
+
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 3).fill(Color.gray.opacity(0.18))
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(LinearGradient(colors: [.green, .yellow, .red], startPoint: .leading, endPoint: .trailing))
-                    .frame(width: CGFloat(max(0.001, value)) * geo.size.width)
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add WLED Device").font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                SectionHeader("Discovered")
+                discoveredList
+            }
+
+            DisclosureGroup(isExpanded: $manualExpanded) {
+                manualEntry.padding(.top, 8)
+            } label: {
+                Text("Manual entry").font(.body)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { isPresented = false }
+                Button("Add") { commit() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canAdd)
             }
         }
-        .frame(height: 8)
+        .padding(20)
+        .frame(width: 380)
+        .onAppear {
+            discovery.start()
+            elapsed = 0
+        }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            elapsed += 1
+            if elapsed > 5 && discovery.discovered.isEmpty {
+                manualExpanded = true
+            }
+        }
+    }
+
+    private var addableDiscoveries: [DiscoveredWLED] {
+        discovery.discovered.filter { d in
+            !settings.settings.devices.contains(where: { $0.ip == d.ip })
+        }
+    }
+
+    @ViewBuilder private var discoveredList: some View {
+        if discovery.discovered.isEmpty {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(elapsed > 5 ? "No devices found yet. Try manual entry." : "Scanning local network…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        } else if addableDiscoveries.isEmpty {
+            Text("All discovered devices are already added. Use manual entry below.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+        } else {
+            VStack(spacing: 4) {
+                ForEach(addableDiscoveries) { d in
+                    discoveredRow(d)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func discoveredRow(_ d: DiscoveredWLED) -> some View {
+        let alreadyConfigured = settings.settings.devices.contains(where: { $0.ip == d.ip })
+        Button { if !alreadyConfigured { selectedID = d.id } } label: {
+            HStack(spacing: 10) {
+                Image(systemName: alreadyConfigured
+                      ? "checkmark.circle.fill"
+                      : (selectedID == d.id ? "largecircle.fill.circle" : "circle"))
+                    .foregroundStyle(alreadyConfigured
+                                     ? AnyShapeStyle(Color.green)
+                                     : (selectedID == d.id ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(d.serviceName).font(.body)
+                    Text(detailLine(d, alreadyConfigured: alreadyConfigured))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(selectedID == d.id ? Color.accentColor.opacity(0.15) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(alreadyConfigured)
+    }
+
+    private func detailLine(_ d: DiscoveredWLED, alreadyConfigured: Bool) -> String {
+        if alreadyConfigured { return "Already configured" }
+        var parts: [String] = [d.ip]
+        if let n = d.pixelCount { parts.append("\(n) px") }
+        if let w = d.rgbw { parts.append(w ? "RGBW" : "RGB") }
+        if let s = d.segmentCount { parts.append("\(s) seg") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var manualEntry: some View {
+        VStack(spacing: 8) {
+            LabeledField(label: "Name", text: $manualName, placeholder: "Living Room")
+            LabeledField(label: "IP", text: $manualIP, placeholder: "192.168.1.42")
+            LabeledField(label: "Pixels", text: $manualCount, placeholder: "120")
+            HStack {
+                Text("RGBW").font(.caption).frame(width: 60, alignment: .leading)
+                Toggle("", isOn: $manualRGBW).labelsHidden().toggleStyle(.switch)
+                Spacer()
+            }
+        }
+    }
+
+    private var canAdd: Bool {
+        if let id = selectedID,
+           let d = discovery.discovered.first(where: { $0.id == id }),
+           !settings.settings.devices.contains(where: { $0.ip == d.ip }) {
+            return true
+        }
+        return !manualName.isEmpty && !manualIP.isEmpty && (Int(manualCount) ?? 0) > 0
+    }
+
+    private func commit() {
+        if let id = selectedID,
+           let d = discovery.discovered.first(where: { $0.id == id }) {
+            model.addDevice(
+                name: d.serviceName,
+                ip: d.ip,
+                pixelCount: d.pixelCount ?? 0 > 0 ? (d.pixelCount ?? 1) : 1,
+                rgbw: d.rgbw ?? false
+            )
+        } else if let count = Int(manualCount), count > 0 {
+            model.addDevice(name: manualName, ip: manualIP, pixelCount: count, rgbw: manualRGBW)
+        }
+        isPresented = false
     }
 }
 
-private struct SpectrumStrip: View {
-    let values: [Float]
-    let palette: Palette
-
+private struct LabeledField: View {
+    let label: String
+    @Binding var text: String
+    let placeholder: String
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .bottom) {
-                // Faint baseline so the visualiser is visibly grounded
-                // even when nothing is playing.
-                Rectangle()
-                    .fill(Color.white.opacity(0.06))
-                    .frame(height: 1)
-                    .frame(maxWidth: .infinity, alignment: .bottom)
-
-                HStack(alignment: .bottom, spacing: 2) {
-                    ForEach(0..<max(1, values.count), id: \.self) { i in
-                        let v = i < values.count ? values[i] : 0
-                        // No more 2% floor — bars collapse to zero when
-                        // silent so the baseline reads as the only line.
-                        let clamped = CGFloat(max(0, min(1, v)))
-                        bar(for: i, height: max(1.5, geo.size.height * clamped))
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            }
+        HStack {
+            Text(label).font(.caption).frame(width: 60, alignment: .leading)
+            TextField(placeholder, text: $text).textFieldStyle(.roundedBorder)
         }
-    }
-
-    @ViewBuilder private func bar(for i: Int, height: CGFloat) -> some View {
-        let f = values.count <= 1 ? Float(0) : Float(i) / Float(values.count - 1)
-        // Skip the deepest palette stops — they're near-black and read
-        // as invisible on the dark panel background. Map [0,1] into the
-        // brighter half-and-a-bit of the palette, then floor every
-        // channel so even the "darkest" colour has visible saturation.
-        let visualF = 0.28 + 0.72 * f
-        let raw = palette.sample(at: visualF)
-        let r = Double(min(1.0, raw.r * 1.15 + 0.06))
-        let g = Double(min(1.0, raw.g * 1.15 + 0.06))
-        let b = Double(min(1.0, raw.b * 1.15 + 0.06))
-        let base = Color(red: r, green: g, blue: b)
-        RoundedRectangle(cornerRadius: 1.5)
-            .fill(LinearGradient(
-                colors: [base.opacity(0.75), base],
-                startPoint: .top, endPoint: .bottom
-            ))
-            .frame(height: height)
     }
 }

@@ -13,15 +13,23 @@
     <key>CFBundleIconName</key>
     <string>AppIcon</string>
     <key>CFBundleExecutable</key>
-    <string>pulsar</string>
+    <string>Pulsar</string>
     <key>CFBundleShortVersionString</key>
     <string>0.2.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>Pulsar reads system audio to drive WLED LED strips in real time.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Pulsar captures system audio output (routed through CoreAudio input) to react LEDs.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Pulsar discovers WLED LED controllers on your local network.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_wled._tcp</string>
+    </array>
     <key>LSUIElement</key>
     <true/>
     <key>NSAppTransportSecurity</key>

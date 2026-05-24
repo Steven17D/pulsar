@@ -49,10 +49,7 @@ struct Config: Codable {
         smoothing: 0.6,
         min_freq_hz: 40,
         max_freq_hz: 16000,
-        devices: [
-            DeviceConfig(name: "Office", ip: "192.168.0.192", pixel_count: 237, rgbw: false, brightness: nil, enabled: nil, segments: nil, mirror: nil, reverse: nil, effect: nil),
-            DeviceConfig(name: "TV",     ip: "192.168.0.186", pixel_count: 240, rgbw: false, brightness: nil, enabled: nil, segments: nil, mirror: nil, reverse: nil, effect: nil),
-        ],
+        devices: [],
         enabled: nil,
         effect: "spectrum",
         palette: "sunset",
@@ -60,9 +57,24 @@ struct Config: Codable {
         intensity: 1.0
     )
 
+    /// Loads config from `path` (or the default location). On first run,
+    /// writes a fresh `.default` to disk so the file is always discoverable.
     static func load(_ path: String? = nil) -> Config {
         let p = path ?? defaultPath
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: p)) else { return .default }
+        let url = URL(fileURLWithPath: p)
+        if !FileManager.default.fileExists(atPath: p) {
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let data = try? enc.encode(Config.default) {
+                try? data.write(to: url, options: .atomic)
+            }
+            return .default
+        }
+        guard let data = try? Data(contentsOf: url) else { return .default }
         guard let cfg = try? JSONDecoder().decode(Config.self, from: data) else {
             FileHandle.standardError.write(Data("Pulsar: config at \(p) failed to parse; using defaults\n".utf8))
             return .default
