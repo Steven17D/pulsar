@@ -1,11 +1,11 @@
 import AppKit
 import SwiftUI
 
-private let panelWidth: CGFloat = 360
-private let hPad: CGFloat = 16
-private let sectionGap: CGFloat = 18
-private let rowGap: CGFloat = 10
-private let cardCorner: CGFloat = 10
+private let panelWidth: CGFloat = 340
+private let hPad: CGFloat = 12
+private let sectionGap: CGFloat = 10
+private let rowGap: CGFloat = 6
+private let cardCorner: CGFloat = 8
 private let snapSpring = Animation.spring(response: 0.3, dampingFraction: 0.85)
 
 /// Light haptic for discrete control changes (palette pick, etc.).
@@ -102,7 +102,7 @@ private struct SectionCard<Content: View>: View {
         VStack(alignment: .leading, spacing: rowGap) {
             content
         }
-        .padding(12)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: cardCorner, style: .continuous)
@@ -513,23 +513,24 @@ private struct DeviceDisclosureRow: View {
     }
 
     var body: some View {
+        let device = currentDevice
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(snapSpring) { expanded.toggle() }
             } label: {
                 HStack(spacing: 10) {
                     Circle()
-                        .fill(dev.enabled ? Color.green : Color.secondary.opacity(0.4))
+                        .fill(device.enabled ? Color.green : Color.secondary.opacity(0.4))
                         .frame(width: 8, height: 8)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(dev.name).font(.body)
-                        Text(detailLine)
+                        Text(device.name).font(.body)
+                        Text(detailLine(device))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                     Toggle("", isOn: Binding(
-                        get: { dev.enabled },
+                        get: { currentDevice.enabled },
                         set: { model.setDeviceEnabled(index: index, $0) }
                     ))
                     .labelsHidden()
@@ -547,7 +548,7 @@ private struct DeviceDisclosureRow: View {
             .buttonStyle(.plain)
 
             if expanded {
-                DeviceDetail(model: model, index: index, dev: dev)
+                DeviceDetail(model: model, index: index, dev: device)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
                     .padding(.top, 2)
@@ -564,8 +565,12 @@ private struct DeviceDisclosureRow: View {
         )
     }
 
-    private var detailLine: String {
-        "\(dev.ip) · \(dev.pixelCount) \(dev.rgbw ? "RGBW" : "RGB") · \(dev.segments.count) seg"
+    private var currentDevice: DeviceRuntime {
+        settings.settings.devices[safe: index] ?? dev
+    }
+
+    private func detailLine(_ device: DeviceRuntime) -> String {
+        "\(device.ip) · \(device.pixelCount) \(device.rgbw ? "RGBW" : "RGB") · \(device.segments.count) seg"
     }
 }
 
@@ -583,18 +588,30 @@ private struct DeviceDetail: View {
     }
 
     var body: some View {
+        let device = currentDevice
         VStack(alignment: .leading, spacing: rowGap) {
             Divider()
 
+            Picker("", selection: Binding(
+                get: { currentDevice.rgbw },
+                set: { model.setDeviceRGBW(index: index, $0) }
+            )) {
+                Text("RGB").tag(false)
+                Text("RGBW").tag(true)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+
             LabeledContent {
-                Text(String(format: "%0.0f%%", dev.brightness * 100))
+                Text(String(format: "%0.0f%%", device.brightness * 100))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             } label: {
                 Text("Brightness")
             }
             Slider(value: Binding(
-                get: { Double(dev.brightness) },
+                get: { Double(currentDevice.brightness) },
                 set: { model.setDeviceBrightness(index: index, Float($0)) }
             ), in: 0...1)
             .disabled(settings.status != .running)
@@ -612,13 +629,13 @@ private struct DeviceDetail: View {
                 .foregroundStyle(.tint)
             }
 
-            ForEach(Array(dev.segments.enumerated()), id: \.element.id) { (segIdx, seg) in
+            ForEach(Array(device.segments.enumerated()), id: \.element.id) { (segIdx, seg) in
                 SegmentRow(model: model, deviceIndex: index, segmentIndex: segIdx, seg: seg)
             }
 
             HStack {
                 Button {
-                    if let url = URL(string: "http://\(dev.ip)/") { NSWorkspace.shared.open(url) }
+                    if let url = URL(string: "http://\(device.ip)/") { NSWorkspace.shared.open(url) }
                 } label: {
                     Label("Open Web UI…", systemImage: "globe")
                         .font(.caption)
@@ -638,6 +655,10 @@ private struct DeviceDetail: View {
             .padding(.top, 4)
         }
     }
+
+    private var currentDevice: DeviceRuntime {
+        settings.settings.devices[safe: index] ?? dev
+    }
 }
 
 private struct SegmentRow: View {
@@ -656,17 +677,18 @@ private struct SegmentRow: View {
     }
 
     var body: some View {
+        let segment = currentSegment
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("Seg \(segmentIndex + 1)").font(.caption.weight(.medium))
-                Text("[\(seg.start) … \(seg.start + seg.length - 1)] · \(seg.length)px")
+                Text("[\(segment.start) … \(segment.start + segment.length - 1)] · \(segment.length)px")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
             HStack(spacing: 12) {
                 Toggle(isOn: Binding(
-                    get: { seg.reverse },
+                    get: { currentSegment.reverse },
                     set: { model.setSegmentReverse(deviceIndex: deviceIndex, segmentIndex: segmentIndex, $0) }
                 )) {
                     Text("Reverse").font(.caption)
@@ -676,7 +698,7 @@ private struct SegmentRow: View {
                 .disabled(settings.status != .running)
 
                 Toggle(isOn: Binding(
-                    get: { seg.mirror },
+                    get: { currentSegment.mirror },
                     set: { model.setSegmentMirror(deviceIndex: deviceIndex, segmentIndex: segmentIndex, $0) }
                 )) {
                     Text("Mirror").font(.caption)
@@ -687,6 +709,10 @@ private struct SegmentRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private var currentSegment: SegmentRuntime {
+        settings.settings.devices[safe: deviceIndex]?.segments[safe: segmentIndex] ?? seg
     }
 }
 
@@ -823,9 +849,10 @@ private struct ActionRow: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .frame(width: 16)
+                    .font(.caption)
+                    .frame(width: 14)
                     .foregroundStyle(.secondary)
-                Text(title).font(.body)
+                Text(title).font(.callout)
                 Spacer()
                 if let s = shortcut {
                     Text("⌘\(s)")
@@ -834,7 +861,7 @@ private struct ActionRow: View {
                 }
             }
             .padding(.horizontal, hPad)
-            .padding(.vertical, 7)
+            .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .background(

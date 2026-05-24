@@ -30,19 +30,10 @@ final class AudioEngine: @unchecked Sendable {
         self.publishLive = publishLive
         self.ringCapacity = max(config.fft_size * 4, 16384)
         self.ring = [Float](repeating: 0, count: ringCapacity)
-        let initialEffect = config.effect ?? config.devices.first?.effect ?? "bands_rainbow"
         let view = renderState.snapshot()
-        for (i, dev) in config.devices.enumerated() {
+        for dev in view.devices {
             senders.append(DDPSender(host: dev.ip, rgbw: dev.rgbw, queueLabel: "ddp.\(dev.name)"))
-            let segs: [SegmentRuntime]
-            if view.devices.indices.contains(i) {
-                segs = view.devices[i].segments
-            } else if let cs = dev.segments, !cs.isEmpty {
-                segs = cs.map { SegmentRuntime(start: $0.start, length: $0.length, reverse: $0.reverse ?? false, mirror: $0.mirror ?? false) }
-            } else {
-                segs = [SegmentRuntime(start: 0, length: dev.pixel_count, reverse: dev.reverse ?? false, mirror: dev.mirror ?? false)]
-            }
-            mappers.append(Mapper(totalPixels: dev.pixel_count, rgbw: dev.rgbw, effect: initialEffect, segments: segs))
+            mappers.append(Mapper(totalPixels: dev.pixelCount, rgbw: dev.rgbw, effect: view.effect, segments: dev.segments))
         }
     }
 

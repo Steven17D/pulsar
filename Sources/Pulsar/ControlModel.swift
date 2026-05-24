@@ -214,7 +214,9 @@ final class ControlModel: ObservableObject {
     func publishLiveFrame(_ frame: LiveFrame, sampleRate: Double) {
         if frame != live.frame { live.frame = frame }
         if settings.settings.sampleRate != sampleRate {
-            settings.settings.sampleRate = sampleRate
+            var snap = settings.settings
+            snap.sampleRate = sampleRate
+            settings.settings = snap
         }
     }
 
@@ -256,7 +258,9 @@ final class ControlModel: ObservableObject {
                 ))
             }
             guard !newSegs.isEmpty, newSegs != dev.segments else { return }
-            settings.settings.devices[i].segments = newSegs
+            var snap = settings.settings
+            snap.devices[i].segments = newSegs
+            settings.settings = snap
             renderState.mutateDevice(index: i) { $0.segments = newSegs }
             persist()
             log.info("device \(dev.name, privacy: .public) → \(newSegs.count) segments")
@@ -268,41 +272,53 @@ final class ControlModel: ObservableObject {
     // MARK: - User actions
 
     func setMasterEnabled(_ v: Bool) {
-        settings.settings.enabled = v
+        var snap = settings.settings
+        snap.enabled = v
+        settings.settings = snap
         renderState.setEnabled(v)
         persist()
     }
 
     func setMasterEffect(_ e: String) {
-        settings.settings.effect = e
+        var snap = settings.settings
+        snap.effect = e
+        settings.settings = snap
         renderState.setEffect(e)
         persist()
     }
 
     func setPalette(_ id: String) {
         guard Palette.allIDs.contains(id) else { return }
-        settings.settings.palette = id
+        var snap = settings.settings
+        snap.palette = id
+        settings.settings = snap
         renderState.setPalette(id)
         persist()
     }
 
     func setSpeed(_ v: Float) {
         let c = max(0, min(2, v))
-        settings.settings.speed = c
+        var snap = settings.settings
+        snap.speed = c
+        settings.settings = snap
         renderState.setSpeed(c)
         persist()
     }
 
     func setIntensity(_ v: Float) {
         let c = max(0, min(2, v))
-        settings.settings.intensity = c
+        var snap = settings.settings
+        snap.intensity = c
+        settings.settings = snap
         renderState.setIntensity(c)
         persist()
     }
 
     func setDeviceEnabled(index: Int, _ v: Bool) {
         guard settings.settings.devices.indices.contains(index) else { return }
-        settings.settings.devices[index].enabled = v
+        var snap = settings.settings
+        snap.devices[index].enabled = v
+        settings.settings = snap
         renderState.mutateDevice(index: index) { $0.enabled = v }
         persist()
     }
@@ -310,15 +326,30 @@ final class ControlModel: ObservableObject {
     func setDeviceBrightness(index: Int, _ b: Float) {
         guard settings.settings.devices.indices.contains(index) else { return }
         let c = max(0, min(1, b))
-        settings.settings.devices[index].brightness = c
+        var snap = settings.settings
+        snap.devices[index].brightness = c
+        settings.settings = snap
         renderState.mutateDevice(index: index) { $0.brightness = c }
         persist()
+    }
+
+    func setDeviceRGBW(index: Int, _ rgbw: Bool) {
+        guard settings.settings.devices.indices.contains(index),
+              settings.settings.devices[index].rgbw != rgbw else { return }
+        var snap = settings.settings
+        snap.devices[index].rgbw = rgbw
+        settings.settings = snap
+        renderState.mutateDevice(index: index) { $0.rgbw = rgbw }
+        persist()
+        rebuildEngine()
     }
 
     func setSegmentReverse(deviceIndex i: Int, segmentIndex s: Int, _ v: Bool) {
         guard settings.settings.devices.indices.contains(i),
               settings.settings.devices[i].segments.indices.contains(s) else { return }
-        settings.settings.devices[i].segments[s].reverse = v
+        var snap = settings.settings
+        snap.devices[i].segments[s].reverse = v
+        settings.settings = snap
         renderState.mutateDevice(index: i) { $0.segments[s].reverse = v }
         persist()
     }
@@ -326,7 +357,9 @@ final class ControlModel: ObservableObject {
     func setSegmentMirror(deviceIndex i: Int, segmentIndex s: Int, _ v: Bool) {
         guard settings.settings.devices.indices.contains(i),
               settings.settings.devices[i].segments.indices.contains(s) else { return }
-        settings.settings.devices[i].segments[s].mirror = v
+        var snap = settings.settings
+        snap.devices[i].segments[s].mirror = v
+        settings.settings = snap
         renderState.mutateDevice(index: i) { $0.segments[s].mirror = v }
         persist()
     }
@@ -342,7 +375,9 @@ final class ControlModel: ObservableObject {
             brightness: 1.0, enabled: true,
             segments: [SegmentRuntime(start: 0, length: pixelCount, reverse: false, mirror: false)]
         )
-        settings.settings.devices.append(dev)
+        var snap = settings.settings
+        snap.devices.append(dev)
+        settings.settings = snap
         var devs = renderState.snapshot().devices
         devs.append(dev)
         renderState.replace(
@@ -363,7 +398,9 @@ final class ControlModel: ObservableObject {
 
     func removeDevice(index: Int) {
         guard settings.settings.devices.indices.contains(index) else { return }
-        settings.settings.devices.remove(at: index)
+        var snap = settings.settings
+        snap.devices.remove(at: index)
+        settings.settings = snap
         var devs = renderState.snapshot().devices
         if devs.indices.contains(index) { devs.remove(at: index) }
         renderState.replace(
@@ -380,7 +417,9 @@ final class ControlModel: ObservableObject {
 
     func renameDevice(index: Int, to name: String) {
         guard settings.settings.devices.indices.contains(index), !name.isEmpty else { return }
-        settings.settings.devices[index].name = name
+        var snap = settings.settings
+        snap.devices[index].name = name
+        settings.settings = snap
         renderState.mutateDevice(index: index) { $0.name = name }
         persist()
     }
