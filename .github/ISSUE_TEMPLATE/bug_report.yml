@@ -1,0 +1,96 @@
+name: Bug report
+description: Report something that does not work as expected
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please search
+        [existing issues](https://github.com/Steven17D/pulsar/issues)
+        first — if your issue is already reported, add a thumbs-up
+        reaction rather than opening a duplicate.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug. Include the exact error text if any.
+      placeholder: Pulsar's spectrum freezes when the Bluetooth headphones disconnect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps so a maintainer can hit the same state.
+      placeholder: |
+        1. Launch Pulsar.
+        2. Start audio playback through Bluetooth output.
+        3. Power off the headphones.
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: false
+
+  - type: input
+    id: pulsar-version
+    attributes:
+      label: Pulsar version
+      description: From the menu-bar panel, or `git rev-parse --short HEAD` if built from source.
+      placeholder: v0.1.0 or commit 1a2b3c4
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: From "About This Mac".
+      placeholder: macOS 14.5 (23F79)
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Mac hardware
+      description: Apple silicon vs Intel, and the model if you know it.
+      placeholder: M2 MacBook Air
+    validations:
+      required: false
+
+  - type: input
+    id: wled-version
+    attributes:
+      label: WLED firmware version
+      description: From the WLED web UI, or "n/a" if not relevant to this bug.
+      placeholder: 0.15.0
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Pulsar config
+      description: Contents of `~/.config/pulsar/config.json` with any secrets removed.
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from `~/.cache/pulsar.log` or `Console.app` filtered by `Pulsar`.
+      render: shell
+    validations:
+      required: false

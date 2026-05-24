@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build release
+        run: swift build -c release
+
+      # TODO: When Apple Developer ID is provisioned, replace ad-hoc sign in `scripts/package.sh` with `xcrun notarytool` flow. Required repo secrets: `APPLE_DEVELOPER_ID_APPLICATION` (base64 .p12), `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`. See https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution
+      - name: Package app
+        run: bash scripts/package.sh
+
+      - name: Create draft GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: Pulsar.zip
+          fail_on_unmatched_files: true
+          name: ${{ github.ref_name }}
+          generate_release_notes: true

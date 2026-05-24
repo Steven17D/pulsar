@@ -1,0 +1,8 @@
+# Code ownership for Pulsar.
+#
+# Format reference:
+#   https://docs.github.com/en/repositories/managing-your-repositories-settings-and-customizations/customizing-your-repository/about-code-owners
+#
+# Until subsystem maintainers exist, a single catch-all owner is enough.
+
+* @Steven17D

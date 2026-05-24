@@ -1,0 +1,15 @@
+# Funding configuration for Pulsar.
+#
+# All entries are commented out until the maintainer decides to accept
+# sponsorship. Uncomment the relevant line, fill in the username or URL,
+# and GitHub will render the "Sponsor" button on the repo home page.
+#
+# Reference:
+#   https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-customizations/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+# github: your-handle
+# ko_fi: your-handle
+# patreon: your-handle
+# open_collective: your-collective
+# liberapay: your-handle
+# custom: ["https://example.com/donate"]

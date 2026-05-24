@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/Steven17D/pulsar/discussions
+    about: Open-ended questions, configuration help, and ideas belong in Discussions.
+  - name: Documentation
+    url: https://github.com/Steven17D/pulsar#readme
+    about: Install, configure, and troubleshoot via the README before filing a bug.
