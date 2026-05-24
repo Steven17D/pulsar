@@ -101,6 +101,8 @@ final class AudioEngine: @unchecked Sendable {
         var pixelBytes = [UInt8]()
         var wasEnabledPerDevice = [Bool](repeating: true, count: mappers.count)
         var masterWasEnabled = true
+        var wasSilent = false
+        let idlePurple = Pixel(r: 88, g: 0, b: 180, w: 0)
         let n = cfg.fft_size
 
         while shouldRun {
@@ -129,6 +131,7 @@ final class AudioEngine: @unchecked Sendable {
 
                 let view = renderState.snapshot()
                 let masterOn = view.enabled
+                let silent = power < 0.001
 
                 if masterOn != masterWasEnabled, !masterOn {
                     for i in 0..<mappers.count {
@@ -160,10 +163,18 @@ final class AudioEngine: @unchecked Sendable {
                         continue
                     }
                     wasEnabledPerDevice[i] = true
+                    if silent {
+                        if !wasSilent {
+                            mappers[i].writeSolid(idlePurple, into: &pixelBytes)
+                            senders[i].send(pixels: pixelBytes)
+                        }
+                        continue
+                    }
                     mappers[i].render(bands: analyzer.bands, power: power, dt: dt)
                     mappers[i].serialize(into: &pixelBytes)
                     senders[i].send(pixels: pixelBytes)
                 }
+                wasSilent = silent
             }
 
             let nowMono = monotonicSeconds()

@@ -173,6 +173,18 @@ final class Mapper {
         out = [UInt8](repeating: 0, count: totalPixels * bytesPerPixel)
     }
 
+    func writeSolid(_ pixel: Pixel, into out: inout [UInt8]) {
+        let bytesPerPixel = rgbw ? 4 : 3
+        out.removeAll(keepingCapacity: true)
+        out.reserveCapacity(totalPixels * bytesPerPixel)
+        let b = max(0, min(1, brightness))
+        @inline(__always) func scale(_ v: UInt8) -> UInt8 { UInt8(Float(v) * b) }
+        for _ in 0..<totalPixels {
+            out.append(scale(pixel.r)); out.append(scale(pixel.g)); out.append(scale(pixel.b))
+            if rgbw { out.append(scale(pixel.w)) }
+        }
+    }
+
     // MARK: - Effects
 
     private func renderTest(dt: Float) {
