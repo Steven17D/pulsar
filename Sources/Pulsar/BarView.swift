@@ -929,10 +929,14 @@ private struct AddDeviceSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { isPresented = false }
-                Button("Add") { commit() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canAdd)
+                if canAdd {
+                    Button("Cancel") { isPresented = false }
+                    Button("Add") { commit() }
+                        .keyboardShortcut(.defaultAction)
+                } else {
+                    Button("Done") { isPresented = false }
+                        .keyboardShortcut(.defaultAction)
+                }
             }
         }
         .padding(20)
@@ -940,6 +944,8 @@ private struct AddDeviceSheet: View {
         .onAppear {
             discovery.start()
             elapsed = 0
+            selectedID = nil
+            manualExpanded = true
         }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             elapsed += 1
@@ -1034,24 +1040,31 @@ private struct AddDeviceSheet: View {
 
     private var canAdd: Bool {
         if let id = selectedID,
-           let d = discovery.discovered.first(where: { $0.id == id }),
+           let d = addableDiscoveries.first(where: { $0.id == id }),
            !settings.settings.devices.contains(where: { $0.ip == d.ip }) {
             return true
         }
-        return !manualName.isEmpty && !manualIP.isEmpty && (Int(manualCount) ?? 0) > 0
+        return !manualName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !manualIP.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (Int(manualCount.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 0
     }
 
     private func commit() {
         if let id = selectedID,
-           let d = discovery.discovered.first(where: { $0.id == id }) {
+           let d = addableDiscoveries.first(where: { $0.id == id }) {
             model.addDevice(
                 name: d.serviceName,
                 ip: d.ip,
                 pixelCount: d.pixelCount ?? 0 > 0 ? (d.pixelCount ?? 1) : 1,
                 rgbw: d.rgbw ?? false
             )
-        } else if let count = Int(manualCount), count > 0 {
-            model.addDevice(name: manualName, ip: manualIP, pixelCount: count, rgbw: manualRGBW)
+        } else if let count = Int(manualCount.trimmingCharacters(in: .whitespacesAndNewlines)), count > 0 {
+            model.addDevice(
+                name: manualName.trimmingCharacters(in: .whitespacesAndNewlines),
+                ip: manualIP.trimmingCharacters(in: .whitespacesAndNewlines),
+                pixelCount: count,
+                rgbw: manualRGBW
+            )
         }
         isPresented = false
     }
