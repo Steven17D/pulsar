@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 private let panelWidth: CGFloat = 340
@@ -58,6 +59,8 @@ struct BarView: View {
                 .padding(.vertical, 2)
         }
         .frame(width: panelWidth, alignment: .leading)
+        .onAppear { model.publishGate.setPanelOpen(true) }
+        .onDisappear { model.publishGate.setPanelOpen(false) }
     }
 
     private var hasAddableDiscoveries: Bool {
@@ -185,9 +188,17 @@ private struct LiveSection: View {
     }
 }
 
+/// Audio publish interval (matches `PublishGate.publishInterval`). Spectrum
+/// interpolation in `SpectrumCanvas` blends from previous to current sample
+/// over one interval so visuals stay smooth between data updates.
+private let kInterpDur: Double = 1.0 / 30.0
+
 private struct SpectrumStripView: View {
     @ObservedObject var live: LiveStore
     @ObservedObject var settings: SettingsStore
+    @State private var prev: [Float] = []
+    @State private var curr: [Float] = []
+    @State private var lastUpdate: Date = .now
 
     init(model: ControlModel) {
         self.live = model.live
@@ -195,68 +206,66 @@ private struct SpectrumStripView: View {
     }
 
     var body: some View {
-        SpectrumStrip(values: live.frame.spectrum,
-                      palette: Palette.by(id: settings.settings.palette))
-            .animation(nil, value: live.frame.spectrum)
+        // TimelineView ticks Canvas at display refresh (capped 30 Hz) and
+        // lerps between prev/curr samples. One immediate-mode draw per tick
+        // instead of 64 SwiftUI views in a ForEach.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+            let dt = ctx.date.timeIntervalSince(lastUpdate)
+            let t = Float(min(1, max(0, dt / kInterpDur)))
+            SpectrumCanvas(prev: prev, curr: curr, t: t,
+                           palette: Palette.by(id: settings.settings.palette))
+        }
+        .onReceive(live.$frame) { f in
+            prev = curr.count == f.spectrum.count ? curr : f.spectrum
+            curr = f.spectrum
+            lastUpdate = .now
+        }
     }
 }
 
-private struct SpectrumStrip: View {
-    let values: [Float]
+private struct SpectrumCanvas: View {
+    let prev: [Float]
+    let curr: [Float]
+    let t: Float
     let palette: Palette
 
     var body: some View {
-        GeometryReader { geo in
-            let mainH = geo.size.height * 0.78
-            let reflectH = geo.size.height - mainH - 1
-            VStack(spacing: 0) {
-                HStack(alignment: .bottom, spacing: 2) {
-                    ForEach(0..<max(1, values.count), id: \.self) { i in
-                        let v = i < values.count ? values[i] : 0
-                        let h = max(1.5, mainH * CGFloat(max(0, min(1, v))))
-                        bar(for: i, height: h)
-                    }
-                }
-                .frame(height: mainH, alignment: .bottom)
-
-                Rectangle()
-                    .fill(Color.primary.opacity(0.08))
-                    .frame(height: 1)
-
-                HStack(alignment: .top, spacing: 2) {
-                    ForEach(0..<max(1, values.count), id: \.self) { i in
-                        let v = i < values.count ? values[i] : 0
-                        let h = max(1, reflectH * CGFloat(max(0, min(1, v))))
-                        bar(for: i, height: h)
-                            .opacity(0.3)
-                            .scaleEffect(y: -1, anchor: .center)
-                    }
-                }
-                .frame(height: reflectH, alignment: .top)
-                .mask(
-                    LinearGradient(
-                        colors: [.black, .clear],
-                        startPoint: .top, endPoint: .bottom
-                    )
+        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { ctx, size in
+            let n = max(curr.count, 1)
+            guard n > 0 else { return }
+            let mainH = size.height * 0.78
+            let reflectH = size.height - mainH - 1
+            let spacing: CGFloat = 2
+            let barW = max(1, (size.width - CGFloat(n - 1) * spacing) / CGFloat(n))
+            for i in 0..<n {
+                let pv = i < prev.count ? prev[i] : 0
+                let cv = i < curr.count ? curr[i] : 0
+                let v = max(0, min(1, pv + (cv - pv) * t))
+                let frac = n <= 1 ? Float(0) : Float(i) / Float(n - 1)
+                let visualF = 0.28 + 0.72 * frac
+                let raw = palette.sample(at: visualF)
+                let color = Color(
+                    red: Double(min(1.0, raw.r * 1.15 + 0.06)),
+                    green: Double(min(1.0, raw.g * 1.15 + 0.06)),
+                    blue: Double(min(1.0, raw.b * 1.15 + 0.06))
+                )
+                let x = CGFloat(i) * (barW + spacing)
+                let h = max(1.5, mainH * CGFloat(v))
+                ctx.fill(
+                    Path(CGRect(x: x, y: mainH - h, width: barW, height: h)),
+                    with: .color(color)
+                )
+                let rh = max(1, reflectH * CGFloat(v))
+                ctx.fill(
+                    Path(CGRect(x: x, y: mainH + 1, width: barW, height: rh)),
+                    with: .color(color.opacity(0.18))
                 )
             }
+            var hair = Path()
+            hair.move(to: CGPoint(x: 0, y: mainH + 0.5))
+            hair.addLine(to: CGPoint(x: size.width, y: mainH + 0.5))
+            ctx.stroke(hair, with: .color(.primary.opacity(0.08)), lineWidth: 1)
         }
-    }
-
-    @ViewBuilder private func bar(for i: Int, height: CGFloat) -> some View {
-        let f = values.count <= 1 ? Float(0) : Float(i) / Float(values.count - 1)
-        let visualF = 0.28 + 0.72 * f
-        let raw = palette.sample(at: visualF)
-        let r = Double(min(1.0, raw.r * 1.15 + 0.06))
-        let g = Double(min(1.0, raw.g * 1.15 + 0.06))
-        let b = Double(min(1.0, raw.b * 1.15 + 0.06))
-        let base = Color(red: r, green: g, blue: b)
-        RoundedRectangle(cornerRadius: 1.5)
-            .fill(LinearGradient(
-                colors: [base.opacity(0.75), base],
-                startPoint: .top, endPoint: .bottom
-            ))
-            .frame(height: height)
     }
 }
 
@@ -274,7 +283,7 @@ private struct PowerBarView: View {
             }
         }
         .frame(height: 6)
-        .animation(nil, value: live.frame.power)
+        .animation(.linear(duration: 0.05), value: live.frame.power)
     }
 }
 
@@ -286,7 +295,6 @@ private struct PowerNumber: View {
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
             .frame(width: 36, alignment: .trailing)
-            .animation(nil, value: live.frame.power)
     }
 }
 
@@ -349,40 +357,52 @@ private struct LookMixSection: View {
                 value: Double(settings.settings.brightness),
                 range: 0...1,
                 valueText: "\(Int(settings.settings.brightness * 100))%",
+                formatLive: { v in "\(Int(v * 100))%" },
                 onChange: { model.setBrightness(Float($0)) },
                 enabled: settings.status == .running,
                 reactive: settings.settings.brightnessReactive,
                 aspect: settings.settings.brightnessAspect,
-                onToggleReactive: { model.setBrightnessReactive(!settings.settings.brightnessReactive) },
-                onSelectAspect: { model.setBrightnessAspect($0) },
-                live: model.live
+                onCycleDriver: { model.cycleBrightnessDriver() },
+                effPublisher: model.eff.brightness,
+                aspectPublisher: aspectPub(for: settings.settings.brightnessAspect)
             )
             ReactiveSliderRow(
                 title: "Speed",
                 value: Double(settings.settings.speed),
                 range: 0.1...2.0,
                 valueText: String(format: "%0.2fx", settings.settings.speed),
+                formatLive: { v in String(format: "%0.2fx", v) },
                 onChange: { model.setSpeed(Float($0)) },
                 enabled: settings.status == .running,
                 reactive: settings.settings.speedReactive,
                 aspect: settings.settings.speedAspect,
-                onToggleReactive: { model.setSpeedReactive(!settings.settings.speedReactive) },
-                onSelectAspect: { model.setSpeedAspect($0) },
-                live: model.live
+                onCycleDriver: { model.cycleSpeedDriver() },
+                effPublisher: model.eff.speed,
+                aspectPublisher: aspectPub(for: settings.settings.speedAspect)
             )
             ReactiveSliderRow(
                 title: "Intensity",
                 value: Double(settings.settings.intensity),
                 range: 0.1...2.0,
                 valueText: String(format: "%0.2fx", settings.settings.intensity),
+                formatLive: { v in String(format: "%0.2fx", v) },
                 onChange: { model.setIntensity(Float($0)) },
                 enabled: settings.status == .running,
                 reactive: settings.settings.intensityReactive,
                 aspect: settings.settings.intensityAspect,
-                onToggleReactive: { model.setIntensityReactive(!settings.settings.intensityReactive) },
-                onSelectAspect: { model.setIntensityAspect($0) },
-                live: model.live
+                onCycleDriver: { model.cycleIntensityDriver() },
+                effPublisher: model.eff.intensity,
+                aspectPublisher: aspectPub(for: settings.settings.intensityAspect)
             )
+        }
+    }
+
+    private func aspectPub(for aspect: AudioAspect) -> CurrentValueSubject<Float, Never> {
+        switch aspect {
+        case .power:  return model.aspect.power
+        case .bass:   return model.aspect.bass
+        case .treble: return model.aspect.treble
+        case .beat:   return model.aspect.beat
         }
     }
 
@@ -439,131 +459,88 @@ private struct CompactPaletteSwatch: View {
     }
 }
 
-/// Slider row that can optionally be driven by an audio aspect. Manual
-/// mode behaves like a regular slider; reactive mode multiplies the
-/// slider value by the live aspect signal so the slider acts as a cap.
-/// A waveform pill on the left toggles reactivity; a gear on the right
-/// opens an aspect picker popover.
+/// Slider row with a single cycling driver button. Tap cycles `off → power →
+/// bass → treble → beat → off`. In off mode the slider is draggable and shows
+/// the user's base value. In any reactive mode the slider is locked and the
+/// thumb animates to the live effective value (base × floor-respecting driver
+/// signal) so the user sees audio modulation directly on the control. The
+/// button glyph reflects the current state. Layout: `title | slider | aspect
+/// icon | value`. The row reads live values from its observed LiveStore so
+/// it re-renders on every audio frame (parents typically don't observe live).
 private struct ReactiveSliderRow: View {
     let title: String
     let value: Double
     let range: ClosedRange<Double>
     let valueText: String
+    let formatLive: (Float) -> String
     let onChange: (Double) -> Void
     let enabled: Bool
     let reactive: Bool
     let aspect: AudioAspect
-    let onToggleReactive: () -> Void
-    let onSelectAspect: (AudioAspect) -> Void
-    @ObservedObject var live: LiveStore
-    @State private var showAspectPopover: Bool = false
+    let onCycleDriver: () -> Void
+    let effPublisher: CurrentValueSubject<Float, Never>
+    let aspectPublisher: CurrentValueSubject<Float, Never>
+    @State private var liveEff: Float = 1
 
     var body: some View {
+        let liveClamped = min(max(Double(liveEff), range.lowerBound), range.upperBound)
+        let shownValue = reactive ? liveClamped : value
+        let shownText = reactive ? formatLive(liveEff) : valueText
         HStack(spacing: 6) {
             Text(title)
                 .font(.callout)
                 .frame(width: 70, alignment: .leading)
-            ReactivePill(active: reactive, aspect: aspect, live: live, action: onToggleReactive)
-                .disabled(!enabled)
             Slider(value: Binding(
-                get: { value },
+                get: { shownValue },
                 set: { v in
+                    if reactive { return }
                     let snapped = range.contains(1.0) && abs(v - 1.0) < 0.04 ? 1.0 : v
                     onChange(snapped)
                 }
             ), in: range)
-            .disabled(!enabled)
-            Button {
-                showAspectPopover = true
-            } label: {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(reactive ? Color.accentColor : Color.secondary.opacity(0.55))
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!enabled || !reactive)
-            .popover(isPresented: $showAspectPopover, arrowEdge: .top) {
-                AspectPopover(selected: aspect) { a in
-                    onSelectAspect(a)
-                    showAspectPopover = false
-                }
-            }
-            Text(valueText)
+            .disabled(!enabled || reactive)
+            .allowsHitTesting(enabled && !reactive)
+            .animation(reactive ? .linear(duration: 0.05) : nil, value: shownValue)
+            AspectIcon(reactive: reactive, aspect: aspect, aspectPublisher: aspectPublisher, action: onCycleDriver)
+                .disabled(!enabled)
+            Text(shownText)
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(reactive ? Color.secondary.opacity(0.55) : .secondary)
+                .foregroundStyle(.secondary)
                 .frame(width: 42, alignment: .trailing)
         }
         .frame(height: 26)
+        .onReceive(effPublisher) { newValue in liveEff = newValue }
     }
 }
 
-/// Waveform-shaped toggle pill. Tints accent when active; the icon
-/// scales gently with the current aspect signal so the user gets a
-/// visual confirmation the slider is being driven by audio.
-private struct ReactivePill: View {
-    let active: Bool
+/// Cycling driver icon. In off mode shows a dim waveform symbol; in reactive
+/// mode shows the selected aspect's symbol tinted accent and scales gently
+/// with the live aspect signal so the user gets visual confirmation the
+/// driver is firing. Each tap advances the state via the supplied closure.
+private struct AspectIcon: View {
+    let reactive: Bool
     let aspect: AudioAspect
-    @ObservedObject var live: LiveStore
+    let aspectPublisher: CurrentValueSubject<Float, Never>
     let action: () -> Void
+    @State private var signal: Float = 0
 
     var body: some View {
-        let signal = active ? live.frame.value(for: aspect) : 0
-        let scale = 1.0 + 0.30 * Double(signal)
+        let shownSignal: Float = reactive ? signal : 0
+        let symbol = reactive ? aspect.symbol : "waveform"
+        let scale = 1.0 + 0.30 * Double(shownSignal)
         Button(action: action) {
-            Image(systemName: "waveform")
+            Image(systemName: symbol)
                 .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(active ? Color.accentColor : Color.secondary.opacity(0.55))
+                .foregroundStyle(reactive ? Color.accentColor : Color.secondary.opacity(0.55))
                 .scaleEffect(scale)
-                .frame(width: 18, height: 18)
-                .background(
-                    Capsule().fill(active ? Color.accentColor.opacity(0.18) : Color.clear)
-                )
+                .frame(width: 22, height: 18)
+                .background(Capsule().fill(reactive ? Color.accentColor.opacity(0.18) : Color.clear))
                 .contentShape(Rectangle())
-                .animation(.easeOut(duration: 0.08), value: signal)
+                .animation(reactive ? .linear(duration: 0.05) : nil, value: shownSignal)
         }
         .buttonStyle(.plain)
-        .help(active ? "Audio-driven (\(aspect.label))" : "Manual — tap to make reactive")
-    }
-}
-
-/// Popover content for choosing which audio aspect drives a slider.
-private struct AspectPopover: View {
-    let selected: AudioAspect
-    let onSelect: (AudioAspect) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Driven by")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-            ForEach(AudioAspect.allCases, id: \.self) { a in
-                Button { onSelect(a) } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: a.symbol)
-                            .frame(width: 18)
-                            .foregroundStyle(a == selected ? Color.accentColor : .primary)
-                        Text(a.label).font(.callout)
-                        Spacer()
-                        if a == selected {
-                            Image(systemName: "checkmark")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(Color.accentColor)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer().frame(height: 6)
-        }
-        .frame(width: 170)
+        .help(reactive ? "Driven by \(aspect.label) — tap to cycle" : "Manual — tap to cycle audio source")
+        .onReceive(aspectPublisher) { v in signal = v }
     }
 }
 
@@ -898,6 +875,7 @@ private struct StartupSection: View {
 private struct StatusPill: View {
     @ObservedObject var live: LiveStore
     @ObservedObject var settings: SettingsStore
+    @State private var lastNonSilent: Date = .distantPast
 
     init(model: ControlModel) {
         self.live = model.live
@@ -915,6 +893,9 @@ private struct StatusPill: View {
         }
         .padding(.horizontal, 7).padding(.vertical, 3)
         .background(Capsule().fill(kind.dot.opacity(0.15)))
+        .onReceive(live.$frame) { f in
+            if f.power > 0.003 { lastNonSilent = .now }
+        }
     }
 
     private enum Kind {
@@ -949,7 +930,10 @@ private struct StatusPill: View {
             let f = live.frame
             if !f.aggregateAlive { return .problem }
             if !settings.settings.enabled { return .paused }
-            if f.power < 0.001 { return .silent }
+            // Hysteresis: only switch to silent after no audio for 800 ms.
+            // Stops short FFT-window dips between drum hits from flickering
+            // the pill back and forth.
+            if Date.now.timeIntervalSince(lastNonSilent) > 0.8 { return .silent }
             return .running
         }
     }

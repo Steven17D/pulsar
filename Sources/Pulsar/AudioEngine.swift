@@ -1,7 +1,9 @@
 import AudioToolbox
 import Darwin
 import Foundation
+import os
 import OSLog
+import Synchronization
 
 final class AudioEngine: @unchecked Sendable {
     private let log = Logger(subsystem: "io.pulsar.audio", category: "AudioEngine")
@@ -10,13 +12,15 @@ final class AudioEngine: @unchecked Sendable {
     private let cfg: Config
     private let tap = SystemAudioTap()
 
-    private var ring: [Float]
-    private var writePos: Int = 0
-    private var samplesAvailable: Int = 0
-    private var ioCallbacks: Int = 0
-    private var ioFrames: Int = 0
-    private let ringLock = NSLock()
+    // SPSC ring. Writer (CoreAudio IO thread) is the sole mutator of `ring`
+    // and `writeIndex`; reader (render thread) is the sole mutator of
+    // `readIndex`. Indices are monotonically increasing UInt64s; slot lookup
+    // uses `& mask` since `ringCapacity` is a power of two.
+    private let ring: UnsafeMutableBufferPointer<Float>
+    private let writeIndex = Atomic<UInt64>(0)
+    private let readIndex = Atomic<UInt64>(0)
     private let ringCapacity: Int
+    private let ringMask: UInt64
 
     private var senders: [DDPSender] = []
     private var mappers: [Mapper] = []
@@ -28,8 +32,12 @@ final class AudioEngine: @unchecked Sendable {
         self.cfg = config
         self.renderState = renderState
         self.publishLive = publishLive
-        self.ringCapacity = max(config.fft_size * 4, 16384)
-        self.ring = [Float](repeating: 0, count: ringCapacity)
+        let cap = Self.nextPow2(max(config.fft_size * 4, 16384))
+        self.ringCapacity = cap
+        self.ringMask = UInt64(cap - 1)
+        let buf = UnsafeMutableBufferPointer<Float>.allocate(capacity: cap)
+        buf.initialize(repeating: 0)
+        self.ring = buf
         let view = renderState.snapshot()
         for dev in view.devices {
             senders.append(DDPSender(host: dev.ip, rgbw: dev.rgbw, queueLabel: "ddp.\(dev.name)"))
@@ -37,21 +45,32 @@ final class AudioEngine: @unchecked Sendable {
         }
     }
 
+    deinit {
+        ring.deinitialize()
+        ring.deallocate()
+    }
+
+    private static func nextPow2(_ n: Int) -> Int {
+        var v = 1
+        while v < n { v <<= 1 }
+        return v
+    }
+
     func start() throws {
         try tap.start { [weak self] ptr, frameCount, channels in
             guard let self else { return }
-            self.ringLock.lock()
-            defer { self.ringLock.unlock() }
-            self.ioCallbacks += 1
-            self.ioFrames += frameCount
+            // RT context: no allocations, no locks. SPSC single-writer path.
+            var w = self.writeIndex.load(ordering: .relaxed)
+            let invCh = 1 / Float(max(channels, 1))
+            let mask = self.ringMask
             for i in 0..<frameCount {
                 var s: Float = 0
-                for c in 0..<channels { s += ptr[i * channels + c] }
-                s /= Float(max(channels, 1))
-                self.ring[self.writePos] = s
-                self.writePos = (self.writePos + 1) % self.ringCapacity
+                let base = i * channels
+                for c in 0..<channels { s += ptr[base + c] }
+                self.ring[Int(w & mask)] = s * invCh
+                w &+= 1
             }
-            self.samplesAvailable = min(self.samplesAvailable + frameCount, self.ringCapacity)
+            self.writeIndex.store(w, ordering: .releasing)
         }
 
         var waited = 0
@@ -115,15 +134,17 @@ final class AudioEngine: @unchecked Sendable {
             if sleep > 0 { Thread.sleep(forTimeInterval: sleep) }
             lastTick = monotonicSeconds()
 
-            ringLock.lock()
-            let haveWindow = samplesAvailable >= n
-            let start = ((writePos - n) % ringCapacity + ringCapacity) % ringCapacity
+            let w = writeIndex.load(ordering: .acquiring)
+            let r = readIndex.load(ordering: .relaxed)
+            let haveWindow = (w &- r) >= UInt64(n)
             if haveWindow {
+                let start = w &- UInt64(n)
+                let mask = ringMask
                 for i in 0..<n {
-                    window[i] = ring[(start + i) % ringCapacity]
+                    window[i] = ring[Int((start &+ UInt64(i)) & mask)]
                 }
+                readIndex.store(w, ordering: .releasing)
             }
-            ringLock.unlock()
 
             var powerOut: Float = 0
             if haveWindow {
@@ -173,15 +194,29 @@ final class AudioEngine: @unchecked Sendable {
                 case .beat:   return beatOut
                 }
             }
+            // Drive base × (floor + (1-floor) × signal). The floor stops speed
+            // and intensity from collapsing to zero on silence so effects keep
+            // moving between beats; brightness has no floor so a quiet room is
+            // visibly dark.
+            func driven(_ base: Float, signal: Float, floor: Float) -> Float {
+                return base * (floor + (1 - floor) * signal)
+            }
             let effBrightness = view.brightnessReactive
-                ? view.brightness * aspectSignal(view.brightnessAspect)
+                ? driven(view.brightness, signal: aspectSignal(view.brightnessAspect), floor: 0.0)
                 : view.brightness
             let effSpeed = view.speedReactive
-                ? max(0.05, view.speed * aspectSignal(view.speedAspect))
+                ? max(0.05, driven(view.speed, signal: aspectSignal(view.speedAspect), floor: 0.25))
                 : view.speed
             let effIntensity = view.intensityReactive
-                ? view.intensity * aspectSignal(view.intensityAspect)
+                ? driven(view.intensity, signal: aspectSignal(view.intensityAspect), floor: 0.20)
                 : view.intensity
+
+            // Ambient effects (plasma, etc.) read `power` to modulate phase rate.
+            // When the user has every reactivity toggle off they expect a calm
+            // non-pulsing ambient — gate audio power going to ambient renderers
+            // by whether any reactivity toggle is on.
+            let anyReactive = view.brightnessReactive || view.speedReactive || view.intensityReactive
+            let effPower = (Mapper.isAmbient(view.effect) && !anyReactive) ? 0 : powerOut
 
             for i in 0..<mappers.count {
                 let dev = i < view.devices.count ? view.devices[i] : nil
@@ -214,7 +249,7 @@ final class AudioEngine: @unchecked Sendable {
                     }
                     continue
                 }
-                mappers[i].render(bands: bands, power: powerOut, dt: dt)
+                mappers[i].render(bands: bands, power: effPower, dt: dt)
                 mappers[i].serialize(into: &pixelBytes)
                 senders[i].send(pixels: pixelBytes)
             }
@@ -238,7 +273,10 @@ final class AudioEngine: @unchecked Sendable {
                 treble: trebleOut,
                 beat: beatOut,
                 lastFrameAgo: 0,
-                aggregateAlive: aggregateAlive
+                aggregateAlive: aggregateAlive,
+                effBrightness: effBrightness,
+                effSpeed: effSpeed,
+                effIntensity: effIntensity
             )
             publishLive(frame, sampleRate)
         }

@@ -133,6 +133,9 @@ final class Mapper {
     private var plasmaPhaseA: Float = 0
     private var plasmaPhaseB: Float = 0
 
+    private var wireBuf: [Pixel] = []
+    private var byteBuf: [UInt8] = []
+
     init(totalPixels: Int, rgbw: Bool, effect: String, segments: [SegmentRuntime]) {
         self.totalPixels = totalPixels
         self.rgbw = rgbw
@@ -143,6 +146,8 @@ final class Mapper {
         self.pixels = Array(repeating: .off, count: r)
         self.lastEffect = effect
         self.lastPaletteID = palette.id
+        self.wireBuf = [Pixel](repeating: .off, count: totalPixels)
+        self.byteBuf = [UInt8](repeating: 0, count: totalPixels * (rgbw ? 4 : 3))
     }
 
     private static func computeRenderLen(_ segments: [SegmentRuntime], fallback: Int) -> Int {
@@ -205,10 +210,10 @@ final class Mapper {
             let a = transitionFrom[i]
             let b = pixels[i]
             pixels[i] = Pixel(
-                r: UInt8((Float(a.r) * inv) + (Float(b.r) * xe)),
-                g: UInt8((Float(a.g) * inv) + (Float(b.g) * xe)),
-                b: UInt8((Float(a.b) * inv) + (Float(b.b) * xe)),
-                w: UInt8((Float(a.w) * inv) + (Float(b.w) * xe))
+                r: UInt8(clamping: Int((Float(a.r) * inv) + (Float(b.r) * xe))),
+                g: UInt8(clamping: Int((Float(a.g) * inv) + (Float(b.g) * xe))),
+                b: UInt8(clamping: Int((Float(a.b) * inv) + (Float(b.b) * xe))),
+                w: UInt8(clamping: Int((Float(a.w) * inv) + (Float(b.w) * xe)))
             )
         }
     }
@@ -216,7 +221,7 @@ final class Mapper {
     func serialize(into out: inout [UInt8]) {
         out.removeAll(keepingCapacity: true)
         let bytesPerPixel = rgbw ? 4 : 3
-        var wire = [Pixel](repeating: .off, count: totalPixels)
+        for i in 0..<totalPixels { wireBuf[i] = .off }
         for seg in segments {
             let s = max(0, seg.start)
             let len = max(0, min(seg.length, totalPixels - s))
@@ -226,7 +231,7 @@ final class Mapper {
                 let srcLocal = (seg.mirror && i >= halfPoint) ? (len - 1 - i) : i
                 let srcIdx = min(srcLocal, renderLen - 1)
                 let dstLocal = seg.reverse ? (len - 1 - i) : i
-                wire[s + dstLocal] = pixels[srcIdx]
+                wireBuf[s + dstLocal] = pixels[srcIdx]
             }
         }
         out.reserveCapacity(totalPixels * bytesPerPixel)
@@ -244,10 +249,9 @@ final class Mapper {
         let fallback = palette.sample(at: 0.5)
         let dimByte = UInt8(min(255, floorFrac * 255))
 
-        var bytes = [UInt8](repeating: 0, count: totalPixels * bytesPerPixel)
         var idx = 0
         var sumF: Float = 0
-        for p in wire {
+        for p in wireBuf {
             var r  = scale(p.r)
             var g  = scale(p.g)
             var bl = scale(p.b)
@@ -261,24 +265,24 @@ final class Mapper {
                     bl = UInt8(min(255, fallback.b * Float(dimByte)))
                 }
             }
-            bytes[idx] = r;  idx += 1
-            bytes[idx] = g;  idx += 1
-            bytes[idx] = bl; idx += 1
+            byteBuf[idx] = r;  idx += 1
+            byteBuf[idx] = g;  idx += 1
+            byteBuf[idx] = bl; idx += 1
             sumF += Float(r) + Float(g) + Float(bl)
-            if rgbw { bytes[idx] = w; idx += 1; sumF += Float(w) }
+            if rgbw { byteBuf[idx] = w; idx += 1; sumF += Float(w) }
         }
 
         if floorFrac > 0 {
             let target = floorFrac * Float(totalPixels * bytesPerPixel) * 255
             if sumF < target {
                 let gain = min(4.0, target / max(sumF, 1))
-                for j in 0..<bytes.count {
-                    bytes[j] = UInt8(min(255, Float(bytes[j]) * gain))
+                for j in 0..<byteBuf.count {
+                    byteBuf[j] = UInt8(min(255, Float(byteBuf[j]) * gain))
                 }
             }
         }
 
-        out.append(contentsOf: bytes)
+        out.append(contentsOf: byteBuf)
     }
 
     func writeBlack(into out: inout [UInt8]) {
@@ -453,16 +457,18 @@ final class Mapper {
         // Zero pixels each frame (no decay; bars fully redrawn).
         for i in 0..<renderLen { pixels[i] = .off }
 
-        let bandsPerBar = max(1, bands.count / nBars)
         let gain = max(0.2, min(3.0, intensity * 1.6))
         let peakFallPerSec: Float = 1.2  // bar-fractions/sec
         for bi in 0..<nBars {
+            let loBand = bi * bands.count / nBars
+            let hiBand = (bi + 1) * bands.count / nBars
+            let span = max(1, hiBand - loBand)
             var sum: Float = 0
-            for j in 0..<bandsPerBar {
-                let idx = min(bands.count - 1, bi * bandsPerBar + j)
+            for j in 0..<span {
+                let idx = min(bands.count - 1, loBand + j)
                 sum += bands[idx]
             }
-            let amp = max(0, min(1, sum / Float(bandsPerBar) * gain))
+            let amp = max(0, min(1, sum / Float(span) * gain))
             peakHolds[bi] = max(peakHolds[bi] - dt * peakFallPerSec, amp)
 
             let barStart = bi * pixelsPerBar
@@ -591,6 +597,7 @@ final class Mapper {
     /// colour and fades. `speed` shortens twinkle lifetime (faster
     /// flicker); `intensity` raises spawn rate.
     private func renderGlitter(bands: [Float], power: Float, dt: Float) {
+        guard renderLen > 0 else { return }
         // Base gradient — palette across strip dimmed.
         let nn = Float(max(renderLen - 1, 1))
         let base: Float = 0.18 + min(0.30, power * intensity * 1.5)

@@ -1,20 +1,22 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
     name: "Pulsar",
     platforms: [
-        .macOS("14.4"),
+        .macOS(.v15),
     ],
     targets: [
         .executableTarget(
             name: "Pulsar",
             path: "Sources/Pulsar",
-            exclude: ["Info.plist"]
+            exclude: ["Info.plist"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
             name: "PulsarTests",
-            dependencies: ["Pulsar"]
+            dependencies: ["Pulsar"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
 )

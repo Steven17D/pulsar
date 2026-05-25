@@ -1,7 +1,9 @@
 import AppKit
 import Combine
 import Foundation
+import os
 import OSLog
+import QuartzCore
 import SwiftUI
 
 @MainActor
@@ -9,10 +11,26 @@ final class LiveStore: ObservableObject {
     @Published var frame: LiveFrame = .zero
 }
 
+final class EffStore: @unchecked Sendable {
+    let brightness = CurrentValueSubject<Float, Never>(1)
+    let speed = CurrentValueSubject<Float, Never>(1)
+    let intensity = CurrentValueSubject<Float, Never>(1)
+}
+
+final class AspectStore: @unchecked Sendable {
+    let power = CurrentValueSubject<Float, Never>(0)
+    let bass = CurrentValueSubject<Float, Never>(0)
+    let treble = CurrentValueSubject<Float, Never>(0)
+    let beat = CurrentValueSubject<Float, Never>(0)
+}
+
+/// Coarse "is audio aggregate alive" + status, separated from `LiveStore.frame`
+/// so the menu-bar symbol controller never re-fires on every audio frame.
 @MainActor
 final class SettingsStore: ObservableObject {
     @Published var settings: Settings = .empty
     @Published var status: AudioStatus = .starting
+    @Published var aggregateAlive: Bool = false
 }
 
 struct RenderView {
@@ -147,18 +165,64 @@ final class RenderState: @unchecked Sendable {
     }
 }
 
+/// Off-main coordinator that decides whether an audio frame should be
+/// hopped to the main thread. Owns the panel-visible flag and the throttle
+/// timestamp behind a single unfair lock so the audio callback stays cheap.
+final class PublishGate: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock<State>(initialState: State())
+    private struct State {
+        var panelOpen: Bool = false
+        var lastAggregateAlive: Bool = false
+        var lastPublishTime: CFTimeInterval = 0
+    }
+
+    /// Min spacing between full-frame publishes (~30 Hz panel-open).
+    private static let publishInterval: CFTimeInterval = 1.0 / 30.0
+
+    func setPanelOpen(_ open: Bool) {
+        lock.withLock { $0.panelOpen = open }
+    }
+
+    /// Returns true if the caller should dispatch this frame to the main
+    /// thread. Updates throttling state on accept. Aggregate-alive
+    /// transitions always pass so the menubar symbol stays in sync even
+    /// when the panel is closed.
+    func shouldPublish(aggregateAlive: Bool, now: CFTimeInterval) -> Bool {
+        lock.withLock { st in
+            let aliveTransition = aggregateAlive != st.lastAggregateAlive
+            if aliveTransition {
+                st.lastAggregateAlive = aggregateAlive
+                st.lastPublishTime = now
+                return true
+            }
+            guard st.panelOpen else { return false }
+            if now - st.lastPublishTime < Self.publishInterval { return false }
+            st.lastPublishTime = now
+            return true
+        }
+    }
+}
+
 @MainActor
 final class ControlModel: ObservableObject {
     static let shared = ControlModel()
     let log = Logger(subsystem: "io.pulsar.audio", category: "ControlModel")
 
     let live = LiveStore()
+    let eff = EffStore()
+    let aspect = AspectStore()
     let settings = SettingsStore()
     let renderState = RenderState()
     let discovery = WLEDDiscovery()
 
     @Published private(set) var startAtLogin: Bool = false
     @Published var startupNotice: String?
+
+    /// Off-main gate for the audio-frame publish hop. The menu-bar panel
+    /// toggles this in `onAppear`/`onDisappear`; while closed, we skip the
+    /// main-thread hop entirely except on `aggregateAlive` transitions, so
+    /// the menubar symbol still updates.
+    let publishGate = PublishGate()
 
     private var engine: AudioEngine?
     private var baseConfig: Config = .default
@@ -264,7 +328,12 @@ final class ControlModel: ObservableObject {
     }
 
     private func startEngine(retry: Int = 0) {
+        let gate = publishGate
         let engine = AudioEngine(config: baseConfig, renderState: renderState) { frame, sr in
+            guard gate.shouldPublish(
+                aggregateAlive: frame.aggregateAlive,
+                now: CACurrentMediaTime()
+            ) else { return }
             DispatchQueue.main.async {
                 ControlModel.shared.publishLiveFrame(frame, sampleRate: sr)
             }
@@ -287,11 +356,37 @@ final class ControlModel: ObservableObject {
     }
 
     func publishLiveFrame(_ frame: LiveFrame, sampleRate: Double) {
+        if settings.aggregateAlive != frame.aggregateAlive {
+            settings.aggregateAlive = frame.aggregateAlive
+        }
         if frame != live.frame { live.frame = frame }
         if settings.settings.sampleRate != sampleRate {
             var snap = settings.settings
             snap.sampleRate = sampleRate
             settings.settings = snap
+        }
+
+        let eps: Float = 0.02
+        let s = settings.settings
+        func push(_ subj: CurrentValueSubject<Float, Never>, _ v: Float) {
+            if abs(subj.value - v) > eps { subj.send(v) }
+        }
+        if s.brightnessReactive { push(eff.brightness, frame.effBrightness) }
+        if s.speedReactive      { push(eff.speed,      frame.effSpeed) }
+        if s.intensityReactive  { push(eff.intensity,  frame.effIntensity) }
+
+        let used = Set([
+            s.brightnessReactive ? s.brightnessAspect : nil,
+            s.speedReactive      ? s.speedAspect      : nil,
+            s.intensityReactive  ? s.intensityAspect  : nil,
+        ].compactMap { $0 })
+        for a in used {
+            switch a {
+            case .power:  push(aspect.power,  frame.power)
+            case .bass:   push(aspect.bass,   frame.bass)
+            case .treble: push(aspect.treble, frame.treble)
+            case .beat:   push(aspect.beat,   frame.beat)
+            }
         }
     }
 
@@ -307,9 +402,10 @@ final class ControlModel: ObservableObject {
     }
 
     func refreshSegmentsFromWLED(deviceIndex i: Int) async {
-        let dev = settings.settings.devices[safe: i]
-        guard let dev else { return }
-        guard let url = URL(string: "http://\(dev.ip)/json/cfg") else { return }
+        guard let dev0 = settings.settings.devices[safe: i] else { return }
+        let capturedIP = dev0.ip
+        let capturedName = dev0.name
+        guard let url = URL(string: "http://\(capturedIP)/json/cfg") else { return }
         var req = URLRequest(url: url)
         req.timeoutInterval = 3
         do {
@@ -318,7 +414,9 @@ final class ControlModel: ObservableObject {
                   let hw = json["hw"] as? [String: Any],
                   let led = hw["led"] as? [String: Any],
                   let ins = led["ins"] as? [[String: Any]] else { return }
-            let info = await fetchWLEDInfo(ip: dev.ip)
+            let info = await fetchWLEDInfo(ip: capturedIP)
+            guard let idx = settings.settings.devices.firstIndex(where: { $0.ip == capturedIP }) else { return }
+            let dev = settings.settings.devices[idx]
             var newSegs: [SegmentRuntime] = []
             for inst in ins {
                 let start = inst["start"] as? Int ?? 0
@@ -339,11 +437,11 @@ final class ControlModel: ObservableObject {
             let changed = newSegs != dev.segments || needsEngineRebuild
             guard !newSegs.isEmpty, changed else { return }
             var snap = settings.settings
-            snap.devices[i].pixelCount = newPixelCount
-            snap.devices[i].rgbw = newRGBW
-            snap.devices[i].segments = newSegs
+            snap.devices[idx].pixelCount = newPixelCount
+            snap.devices[idx].rgbw = newRGBW
+            snap.devices[idx].segments = newSegs
             settings.settings = snap
-            renderState.mutateDevice(index: i) {
+            renderState.mutateDevice(index: idx) {
                 $0.pixelCount = newPixelCount
                 $0.rgbw = newRGBW
                 $0.segments = newSegs
@@ -352,7 +450,7 @@ final class ControlModel: ObservableObject {
             if needsEngineRebuild { rebuildEngine() }
             log.info("device \(dev.name, privacy: .public) → \(newSegs.count) segments")
         } catch {
-            log.error("segment refresh failed for \(dev.name, privacy: .public): \(String(describing: error), privacy: .public)")
+            log.error("segment refresh failed for \(capturedName, privacy: .public): \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -463,6 +561,49 @@ final class ControlModel: ObservableObject {
         settings.settings = snap
         renderState.setIntensityAspect(a)
         persist()
+    }
+
+    /// Advance the brightness driver one step: off → power → bass → treble →
+    /// beat → off. The cycling slider-side button calls this on each tap.
+    func cycleBrightnessDriver() {
+        var snap = settings.settings
+        let (r, a) = Self.nextDriverState(reactive: snap.brightnessReactive, aspect: snap.brightnessAspect)
+        snap.brightnessReactive = r
+        snap.brightnessAspect = a
+        settings.settings = snap
+        renderState.setBrightnessReactive(r)
+        renderState.setBrightnessAspect(a)
+        persist()
+    }
+    func cycleSpeedDriver() {
+        var snap = settings.settings
+        let (r, a) = Self.nextDriverState(reactive: snap.speedReactive, aspect: snap.speedAspect)
+        snap.speedReactive = r
+        snap.speedAspect = a
+        settings.settings = snap
+        renderState.setSpeedReactive(r)
+        renderState.setSpeedAspect(a)
+        persist()
+    }
+    func cycleIntensityDriver() {
+        var snap = settings.settings
+        let (r, a) = Self.nextDriverState(reactive: snap.intensityReactive, aspect: snap.intensityAspect)
+        snap.intensityReactive = r
+        snap.intensityAspect = a
+        settings.settings = snap
+        renderState.setIntensityReactive(r)
+        renderState.setIntensityAspect(a)
+        persist()
+    }
+
+    private static func nextDriverState(reactive: Bool, aspect: AudioAspect) -> (Bool, AudioAspect) {
+        if !reactive { return (true, .power) }
+        switch aspect {
+        case .power:  return (true, .bass)
+        case .bass:   return (true, .treble)
+        case .treble: return (true, .beat)
+        case .beat:   return (false, aspect)
+        }
     }
 
     func setDeviceEnabled(index: Int, _ v: Bool) {
@@ -613,6 +754,7 @@ final class ControlModel: ObservableObject {
         let cfg = Config.load()
         baseConfig = cfg
         seedFromConfig(cfg)
+        rebuildEngine()
     }
 
     // MARK: - Startup

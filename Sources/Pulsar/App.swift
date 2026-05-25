@@ -18,21 +18,18 @@ private final class AppController: ObservableObject {
         model.settings.objectWillChange.sink { [weak self] in
             DispatchQueue.main.async { self?.recompute() }
         }.store(in: &cancellables)
-        model.live.objectWillChange.sink { [weak self] in
-            DispatchQueue.main.async { self?.recompute() }
-        }.store(in: &cancellables)
         recompute()
     }
 
     private func recompute() {
         let s = model.settings.settings
-        let f = model.live.frame
+        let alive = model.settings.aggregateAlive
         let new: String
         switch model.settings.status {
         case .starting, .stopped:         new = "waveform"
         case .tccDenied, .aggregateLost:  new = "exclamationmark.triangle"
         case .running:
-            if !f.aggregateAlive { new = "exclamationmark.triangle" }
+            if !alive { new = "exclamationmark.triangle" }
             else if !s.enabled { new = "waveform.slash" }
             else { new = "waveform" }
         }
